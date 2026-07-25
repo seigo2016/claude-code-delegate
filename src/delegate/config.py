@@ -110,7 +110,6 @@ class Settings:
         return enabled[0]
 
 
-
 def _required(body: dict[str, Any], key: str, where: str) -> Any:
     if key not in body:
         raise ConfigError(f"{where} is missing {key}")

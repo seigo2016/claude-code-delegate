@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    # The lock and the detached supervisor behave differently per platform, and
+    # the README claims both work.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --extra dev
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run ty check
+      - run: uv run pytest -q
