@@ -1,7 +1,8 @@
 """What a role needs, and which backends can supply it.
 
-Roles ask for a capability, never a model, so they survive a change of backend.
-Resolution happens before launch, so a gap is a message rather than a late crash.
+A role asks for a level, never a model, so it survives a change of backend. Each
+worker says what that level means for itself. Resolution happens before launch, so
+a gap is a message rather than a late crash.
 """
 
 from __future__ import annotations
@@ -21,12 +22,15 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class Role:
     name: str
-    capability: str
-    effort: str
-    task_class: str
+    level: str
     timeout: int = DEFAULT_TIMEOUT
     requires_allowed_writes: bool = False
-    max_effort_allowed: bool = False
+
+
+@dataclass(frozen=True)
+class Level:
+    model: str
+    effort: str
 
 
 @dataclass(frozen=True)
@@ -34,7 +38,7 @@ class Worker:
     name: str
     adapter: str
     enabled: bool
-    models: dict[str, str]
+    levels: dict[str, Level]
 
 
 @dataclass(frozen=True)
@@ -55,33 +59,25 @@ class Settings:
     workers: dict[str, Worker]
     default_worker: str | None
 
-    def plan(
-        self,
-        role_name: str,
-        *,
-        worker: str | None = None,
-        effort: str | None = None,
-    ) -> Plan:
+    def plan(self, role_name: str, *, worker: str | None = None) -> Plan:
         role = self.roles.get(role_name)
         if role is None:
             known = ", ".join(sorted(self.roles)) or "none configured"
             raise ConfigError(f"unknown role: {role_name} (configured roles: {known})")
 
-        if effort == "max" and not role.max_effort_allowed:
-            raise ConfigError(f"{role.name} does not allow max effort")
         chosen = self._choose_worker(worker)
-        model = chosen.models.get(role.capability)
-        if not model:
+        level = chosen.levels.get(role.level)
+        if level is None:
             raise ConfigError(
-                f"{chosen.name} has no model for capability {role.capability}; "
-                f"add it under [workers.{chosen.name}].models"
+                f"{chosen.name} does not define level {role.level}; "
+                f"add it under [workers.{chosen.name}]"
             )
         return Plan(
             role=role,
             worker=chosen.name,
             adapter=chosen.adapter,
-            model=model,
-            effort=effort or role.effort,
+            model=level.model,
+            effort=level.effort,
             timeout=role.timeout,
         )
 
@@ -126,12 +122,9 @@ def load(path: Path) -> Settings:
     roles = {
         name: Role(
             name=name,
-            capability=str(_required(body, "capability", f"roles.{name}")),
-            effort=str(_required(body, "effort", f"roles.{name}")),
-            task_class=str(_required(body, "task_class", f"roles.{name}")),
+            level=str(_required(body, "level", f"roles.{name}")),
             timeout=int(body.get("timeout", DEFAULT_TIMEOUT)),
             requires_allowed_writes=bool(body.get("requires_allowed_writes", False)),
-            max_effort_allowed=bool(body.get("max_effort_allowed", False)),
         )
         for name, body in raw.get("roles", {}).items()
     }
@@ -140,7 +133,14 @@ def load(path: Path) -> Settings:
             name=name,
             adapter=str(_required(body, "adapter", f"workers.{name}")),
             enabled=bool(body.get("enabled", False)),
-            models={str(k): str(v) for k, v in body.get("models", {}).items()},
+            levels={
+                level: Level(
+                    model=str(_required(entry, "model", f"workers.{name}.{level}")),
+                    effort=str(_required(entry, "effort", f"workers.{name}.{level}")),
+                )
+                for level, entry in body.items()
+                if isinstance(entry, dict)
+            },
         )
         for name, body in raw.get("workers", {}).items()
     }

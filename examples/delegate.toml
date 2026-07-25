@@ -1,67 +1,59 @@
-# Copy to .claude/delegate.toml in your repository, fill in the models you
-# actually have, and set enabled = true on the one you want to use.
+# Copy to .claude/delegate.toml in your repository, fill in models you can
+# actually reach, and set enabled = true on the worker you want to use.
 #
 # Nothing here is on by default. Until a worker is enabled, `delegate submit`
-# refuses and tells you so, and the plugin changes nothing about your session.
+# refuses and says so, and the plugin changes nothing about your session.
 
 default_worker = "codex"
 
-# --- workers ---------------------------------------------------------------
+# --- workers ----------------------------------------------------------------
 #
-# A worker maps the three capability tiers onto models you can actually reach.
-# Leave a tier empty and any role asking for it is refused before launch.
+# A worker says what each level means for itself. A role asking for a level the
+# worker does not define is refused before anything starts.
 
 [workers.codex]
 adapter = "codex"
 enabled = false
-models = { light = "gpt-5.6-luna", standard = "gpt-5.6-terra", frontier = "gpt-5.6-sol" }
+light = { model = "gpt-5.6-luna", effort = "high" }
+standard = { model = "gpt-5.6-terra", effort = "high" }
+frontier = { model = "gpt-5.6-sol", effort = "xhigh" }
 
 [workers.opencode]
 adapter = "opencode"
 enabled = false
 # Run `opencode models` and use the provider/model form it prints.
-models = { light = "", standard = "", frontier = "" }
+light = { model = "", effort = "medium" }
+standard = { model = "", effort = "high" }
+frontier = { model = "", effort = "high" }
 
 [workers.claude]
 adapter = "claude"
 enabled = false
-models = { light = "haiku", standard = "sonnet", frontier = "opus" }
+light = { model = "haiku", effort = "medium" }
+standard = { model = "sonnet", effort = "high" }
+frontier = { model = "opus", effort = "xhigh" }
 
-# --- roles -----------------------------------------------------------------
+# --- roles ------------------------------------------------------------------
 #
-# A role asks for a capability, never for a model, so the same roles work
-# whichever worker you enabled above.
+# A role asks for a level, never a model, so the same roles work whichever
+# worker you enabled above.
 
 [roles.artifact-auditor]
-capability = "standard"
-effort = "high"
-task_class = "review"
+level = "standard"
 
 [roles.repo-cartographer]
-capability = "light"
-effort = "high"
-task_class = "analysis"
+level = "light"
 
 [roles.bounded-implementer]
-capability = "standard"
-effort = "medium"
-task_class = "edit"
+level = "standard"
 requires_allowed_writes = true
 
 [roles.verification-runner]
-capability = "standard"
-effort = "high"
-task_class = "execution"
+level = "standard"
 
 [roles.consistency-auditor]
-capability = "light"
-effort = "high"
-task_class = "review"
+level = "light"
 
 [roles.adversarial-critic]
-capability = "frontier"
-effort = "xhigh"
-task_class = "review"
+level = "frontier"
 timeout = 3600
-# Without this, --effort max is refused for this role.
-max_effort_allowed = true

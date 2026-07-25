@@ -22,17 +22,14 @@ default_worker = "codex"
 [workers.codex]
 adapter = "codex"
 enabled = true
-models = { light = "luna", standard = "terra", frontier = "sol" }
+light = { model = "luna", effort = "high" }
+standard = { model = "terra", effort = "high" }
 
 [roles.artifact-auditor]
-capability = "standard"
-effort = "high"
-task_class = "review"
+level = "standard"
 
 [roles.bounded-implementer]
-capability = "standard"
-effort = "medium"
-task_class = "edit"
+level = "standard"
 requires_allowed_writes = true
 """
 

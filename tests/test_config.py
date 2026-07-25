@@ -1,8 +1,7 @@
-"""Roles say what they need; the worker registry says what is available.
+"""Roles say what level of worker they need; a worker says what that level means.
 
-A role asks for a capability, never for a model name, so the same roles work
-whichever backend is configured. Nothing is enabled by default: until a worker is
-declared, delegation simply does not happen.
+Nothing is enabled by default: until a worker is declared, delegation does not
+happen.
 """
 
 from __future__ import annotations
@@ -19,22 +18,20 @@ default_worker = "codex"
 [workers.codex]
 adapter = "codex"
 enabled = true
-models = { light = "luna", standard = "terra", frontier = "sol" }
+light = { model = "luna", effort = "high" }
+standard = { model = "terra", effort = "high" }
+frontier = { model = "sol", effort = "xhigh" }
 
 [workers.opencode]
 adapter = "opencode"
 enabled = true
-models = { standard = "anthropic/claude-sonnet-5" }
+standard = { model = "kimi", effort = "high" }
 
 [roles.artifact-auditor]
-capability = "standard"
-effort = "high"
-task_class = "review"
+level = "standard"
 
 [roles.adversarial-critic]
-capability = "frontier"
-effort = "xhigh"
-task_class = "review"
+level = "frontier"
 timeout = 3600
 """
 
@@ -45,10 +42,12 @@ def write(tmp_path: Path, text: str) -> Path:
     return path
 
 
-def test_a_role_resolves_to_the_default_workers_model(tmp_path: Path) -> None:
-    settings = config.load(write(tmp_path, SETTINGS))
+def load(tmp_path: Path, text: str = SETTINGS) -> config.Settings:
+    return config.load(write(tmp_path, text))
 
-    plan = settings.plan("artifact-auditor")
+
+def test_a_role_resolves_through_the_level_the_default_worker_defines(tmp_path: Path) -> None:
+    plan = load(tmp_path).plan("artifact-auditor")
 
     assert (plan.worker, plan.adapter, plan.model, plan.effort) == (
         "codex",
@@ -59,118 +58,74 @@ def test_a_role_resolves_to_the_default_workers_model(tmp_path: Path) -> None:
     assert plan.timeout == config.DEFAULT_TIMEOUT
 
 
+def test_the_same_role_resolves_differently_on_another_worker(tmp_path: Path) -> None:
+    plan = load(tmp_path).plan("artifact-auditor", worker="opencode")
+
+    assert (plan.worker, plan.model, plan.effort) == ("opencode", "kimi", "high")
+
+
 def test_a_role_may_carry_its_own_timeout(tmp_path: Path) -> None:
-    settings = config.load(write(tmp_path, SETTINGS))
-
-    assert settings.plan("adversarial-critic").timeout == 3600
-
-
-def test_the_worker_and_the_effort_can_be_chosen_per_task(tmp_path: Path) -> None:
-    settings = config.load(write(tmp_path, SETTINGS))
-
-    plan = settings.plan("artifact-auditor", worker="opencode", effort="xhigh")
-
-    assert (plan.worker, plan.model, plan.effort) == (
-        "opencode",
-        "anthropic/claude-sonnet-5",
-        "xhigh",
-    )
+    assert load(tmp_path).plan("adversarial-critic").timeout == 3600
 
 
 def test_an_unknown_role_is_named_in_the_error(tmp_path: Path) -> None:
-    settings = config.load(write(tmp_path, SETTINGS))
-
     with pytest.raises(config.ConfigError, match="unknown role: reviewer"):
-        settings.plan("reviewer")
+        load(tmp_path).plan("reviewer")
 
 
 def test_with_no_worker_enabled_nothing_is_delegated(tmp_path: Path) -> None:
-    settings = config.load(
-        write(
-            tmp_path,
-            """
-[workers.codex]
-adapter = "codex"
-enabled = false
-models = { standard = "terra" }
-
-[roles.artifact-auditor]
-capability = "standard"
-effort = "high"
-task_class = "review"
-""",
-        )
-    )
-
     with pytest.raises(config.ConfigError, match="no worker is enabled"):
-        settings.plan("artifact-auditor")
+        load(tmp_path, SETTINGS.replace("enabled = true", "enabled = false")).plan(
+            "artifact-auditor"
+        )
 
 
-def test_a_worker_without_a_model_for_the_capability_is_refused_before_launch(
+def test_a_worker_that_does_not_define_the_level_is_refused_before_launch(
     tmp_path: Path,
 ) -> None:
-    settings = config.load(write(tmp_path, SETTINGS))
-
-    with pytest.raises(config.ConfigError, match="opencode has no model for capability frontier"):
-        settings.plan("adversarial-critic", worker="opencode")
+    with pytest.raises(config.ConfigError, match="opencode does not define level frontier"):
+        load(tmp_path).plan("adversarial-critic", worker="opencode")
 
 
 def test_choosing_a_worker_that_is_not_declared_is_refused(tmp_path: Path) -> None:
-    settings = config.load(write(tmp_path, SETTINGS))
-
     with pytest.raises(config.ConfigError, match="unknown worker: cursor"):
-        settings.plan("artifact-auditor", worker="cursor")
+        load(tmp_path).plan("artifact-auditor", worker="cursor")
 
 
 def test_choosing_a_declared_but_disabled_worker_is_refused(tmp_path: Path) -> None:
-    settings = config.load(
-        write(
-            tmp_path,
-            SETTINGS.replace(
-                'adapter = "opencode"\nenabled = true', 'adapter = "opencode"\nenabled = false'
-            ),
-        )
+    text = SETTINGS.replace(
+        'adapter = "opencode"\nenabled = true', 'adapter = "opencode"\nenabled = false'
     )
 
     with pytest.raises(config.ConfigError, match="opencode is declared but not enabled"):
-        settings.plan("artifact-auditor", worker="opencode")
+        load(tmp_path, text).plan("artifact-auditor", worker="opencode")
 
 
 def test_a_default_worker_that_is_not_enabled_is_an_error_not_a_silent_substitution(
     tmp_path: Path,
 ) -> None:
-    settings = config.load(
-        write(tmp_path, SETTINGS.replace('default_worker = "codex"', 'default_worker = "cursor"'))
-    )
+    text = SETTINGS.replace('default_worker = "codex"', 'default_worker = "cursor"')
 
     with pytest.raises(config.ConfigError, match="default_worker cursor is not an enabled worker"):
-        settings.plan("artifact-auditor")
+        load(tmp_path, text).plan("artifact-auditor")
 
 
 def test_several_enabled_workers_with_no_default_must_be_disambiguated(tmp_path: Path) -> None:
-    settings = config.load(write(tmp_path, SETTINGS.replace('default_worker = "codex"\n', "")))
+    text = SETTINGS.replace('default_worker = "codex"\n', "")
 
     with pytest.raises(config.ConfigError, match="set default_worker or pass --worker"):
-        settings.plan("artifact-auditor")
+        load(tmp_path, text).plan("artifact-auditor")
 
 
-def test_a_role_missing_a_required_key_is_reported_not_raised_as_a_key_error(
-    tmp_path: Path,
-) -> None:
-    settings = write(tmp_path, '[roles.artifact-auditor]\neffort = "high"\n')
-
-    with pytest.raises(config.ConfigError, match="roles.artifact-auditor is missing capability"):
-        config.load(settings)
+def test_a_role_without_a_level_is_reported_not_raised_as_a_key_error(tmp_path: Path) -> None:
+    with pytest.raises(config.ConfigError, match="roles.artifact-auditor is missing level"):
+        load(tmp_path, "[roles.artifact-auditor]\ntimeout = 60\n")
 
 
-def test_max_effort_needs_a_role_that_allows_it(tmp_path: Path) -> None:
-    settings = config.load(write(tmp_path, SETTINGS))
+def test_a_level_without_a_model_or_an_effort_is_reported(tmp_path: Path) -> None:
+    text = SETTINGS.replace(
+        'standard = { model = "terra", effort = "high" }', 'standard = { model = "terra" }'
+    )
 
-    with pytest.raises(config.ConfigError, match="artifact-auditor does not allow max effort"):
-        settings.plan("artifact-auditor", effort="max")
-
-
-def test_a_role_that_expects_max_effort_may_be_given_it(tmp_path: Path) -> None:
-    settings = config.load(write(tmp_path, SETTINGS + "\nmax_effort_allowed = true\n"))
-
-    assert settings.plan("adversarial-critic", effort="max").effort == "max"
+    with pytest.raises(config.ConfigError, match="workers.codex.standard is missing effort"):
+        load(tmp_path, text)

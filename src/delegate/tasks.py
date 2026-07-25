@@ -69,7 +69,6 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     lines = [
         f"Project root: {project_root}",
         f"Role: {plan.role.name}",
-        f"Task class: {plan.role.task_class}",
         f"Objective: {value['objective']}",
     ]
     if context:
@@ -131,7 +130,6 @@ def submit(
     title: str,
     value: dict[str, Any],
     worker: str | None = None,
-    effort: str | None = None,
     timeout: int | None = None,
     fresh: bool = False,
 ) -> dict[str, Any]:
@@ -139,7 +137,7 @@ def submit(
     if value["host_only"]:
         raise SubmitRefused("host_only work must stay in Claude Code", run_in="claude-code")
 
-    plan = settings.plan(role, worker=worker, effort=effort)
+    plan = settings.plan(role, worker=worker)
     if plan.role.requires_allowed_writes and not value["allowed_writes"]:
         raise SubmitRefused(f"role {role} requires a non-empty allowed_writes")
     try:
@@ -172,7 +170,6 @@ def submit(
         "adapter": plan.adapter,
         "model": plan.model,
         "effort": plan.effort,
-        "task_class": plan.role.task_class,
         "timeout_sec": timeout if timeout is not None else plan.timeout,
         "pid": None,
         "session_id": None,

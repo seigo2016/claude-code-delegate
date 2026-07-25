@@ -49,15 +49,15 @@ default_worker = "claude"
 [workers.claude]
 adapter = "claude"
 enabled = true
-models = { light = "haiku", standard = "sonnet", frontier = "opus" }
+light = { model = "haiku", effort = "medium" }
+standard = { model = "sonnet", effort = "high" }
+frontier = { model = "opus", effort = "xhigh" }
 
 [roles.artifact-auditor]
-capability = "standard"
-effort = "high"
-task_class = "review"
+level = "standard"
 ```
 
-role が指定するのは capability であり、model 名ではありません。そのため backend を変えても role の定義は変わりません。選んだ worker にその capability の model が設定されていなければ、worker を起動する前に拒否します。
+role が指定するのは level であり、model 名ではありません。その level が何を意味するかは worker 側が定義します。そのため同じ role をどの backend でも使え、`--worker` で task ごとに選べます。選んだ worker がその level を定義していなければ、起動する前に拒否します。
 
 | adapter | 起動 | 結果の受け取り |
 |---|---|---|
@@ -134,15 +134,7 @@ skill と hook が実行します。人が直接使うのは診断のときだ�
 
 sandbox はありません。worker は各 CLI が与える権限で動作します。adapter は 3 つの CLI の出力形式に依存します。形式は実行を観測して確認したものなので、backend の更新で変わる可能性があります。
 
-## やらないこと
-
-汎用の multi-agent orchestrator より意図的に狭い範囲を扱います。1 回の委譲を検証するだけです。次は扱いません。
-
-worker の並列実行、agent 間の会話、多数決や討論、dashboard、agent の永続記憶、workflow engine、実行中の介入、実行記録の集約。
-
 ## 開発
-
-adapter は 3 つの CLI の文書ではなく、実行を記録して書きました。上の検査のうち 2 件は、実際の worker が以前の検査をすり抜けたために足したものです。ある worker は結果を code fence で包んで返し、別の worker は 5 件という上限を守るために 18 件を 1 つの文字列に詰めました。
 
 ```bash
 uv sync --extra dev

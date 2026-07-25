@@ -15,7 +15,7 @@ The final call on scope, on what counts as done, and on anything a person will b
 
 ## 1. Choose a role
 
-Roles come from `.claude/delegate.toml`. A role says what capability the work needs; it never names a model.
+Roles come from `.claude/delegate.toml`. A role says what level of worker the work needs; it never names a model.
 
 | role | for |
 |---|---|

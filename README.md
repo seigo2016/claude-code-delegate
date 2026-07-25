@@ -58,17 +58,18 @@ default_worker = "claude"
 [workers.claude]
 adapter = "claude"
 enabled = true
-models = { light = "haiku", standard = "sonnet", frontier = "opus" }
+light = { model = "haiku", effort = "medium" }
+standard = { model = "sonnet", effort = "high" }
+frontier = { model = "opus", effort = "xhigh" }
 
 [roles.artifact-auditor]
-capability = "standard"
-effort = "high"
-task_class = "review"
+level = "standard"
 ```
 
-A role asks for a capability, never a model, so the same roles work whichever
-backend is configured. If the chosen worker has no model for the capability a
-role needs, the task is refused before anything starts.
+A role asks for a level, never a model, and each worker says what that level
+means for itself. The same roles therefore work whichever backend is configured,
+and `--worker` picks one per task. A role asking for a level the chosen worker
+does not define is refused before anything starts.
 
 | adapter | driven by | answers with |
 |---|---|---|
@@ -161,21 +162,7 @@ There is no sandbox: workers run with whatever their own CLI grants them. The
 adapters follow three CLIs whose event shapes were recorded from real runs, and a
 backend release can move them.
 
-## Non-goals
-
-This is narrower than a general multi-agent orchestrator on purpose: one bounded
-handoff, verified. Not in scope:
-
-parallel worker fleets, agent-to-agent chat, consensus or debate, a dashboard,
-persistent agent memory, a workflow engine, real-time steering, transcript
-aggregation.
-
 ## Development
-
-The adapters were written against recorded runs of the three CLIs rather than
-their documentation. Two of the checks above exist because a real worker got past
-the earlier ones: one returned its result inside a code fence, another honoured
-the five-item limit by packing eighteen findings into a single string.
 
 ```bash
 uv sync --extra dev

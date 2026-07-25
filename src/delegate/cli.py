@@ -55,7 +55,6 @@ def cmd_submit(args: argparse.Namespace) -> int:
             title=args.title,
             value=value,
             worker=args.worker,
-            effort=args.effort,
             timeout=args.timeout,
             fresh=args.fresh,
         )
@@ -237,7 +236,6 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--title", required=True)
     submit.add_argument("--packet", required=True, help="path to the task packet JSON")
     submit.add_argument("--worker", default=None)
-    submit.add_argument("--effort", default=None)
     submit.add_argument("--timeout", type=int, default=None)
     submit.add_argument("--fresh", action="store_true")
     submit.set_defaults(func=cmd_submit)

@@ -6,9 +6,7 @@ from delegate import config, envelope, tasks
 
 
 def plan() -> config.Plan:
-    role = config.Role(
-        name="artifact-auditor", capability="standard", effort="high", task_class="review"
-    )
+    role = config.Role(name="artifact-auditor", level="standard")
     return config.Plan(
         role=role, worker="claude", adapter="claude", model="sonnet", effort="high", timeout=60
     )

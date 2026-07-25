@@ -1,49 +1,46 @@
 # This repository's own delegation settings. It develops itself with itself.
-# Only the roles used here; the full set to copy from is examples/delegate.toml.
 
 default_worker = "claude"
 
 [workers.claude]
 adapter = "claude"
 enabled = true
-models = { light = "haiku", standard = "sonnet", frontier = "opus" }
+light = { model = "haiku", effort = "medium" }
+standard = { model = "sonnet", effort = "high" }
+frontier = { model = "opus", effort = "xhigh" }
 
 # OpenCode Go has a monthly allowance, so it is chosen per task rather than
-# being the default. The frontier tier here is an implementation escalation, not
-# a reviewer; adversarial review belongs on the claude worker.
+# being the default.
 [workers.opencode]
 adapter = "opencode"
 enabled = true
-models = { light = "opencode-go/deepseek-v4-flash", standard = "opencode-go/kimi-k2.7-code", frontier = "opencode-go/glm-5.2" }
+light = { model = "opencode-go/deepseek-v4-flash", effort = "medium" }
+standard = { model = "opencode-go/kimi-k2.7-code", effort = "high" }
+frontier = { model = "opencode-go/glm-5.2", effort = "high" }
 
 [workers.codex]
 adapter = "codex"
 enabled = true
-models = { light = "gpt-5.6-luna", standard = "gpt-5.6-terra", frontier = "gpt-5.6-sol" }
+light = { model = "gpt-5.6-luna", effort = "high" }
+standard = { model = "gpt-5.6-terra", effort = "high" }
+frontier = { model = "gpt-5.6-sol", effort = "xhigh" }
 
 [roles.artifact-auditor]
-capability = "standard"
-effort = "high"
-task_class = "review"
+level = "standard"
 
 [roles.repo-cartographer]
-capability = "light"
-effort = "high"
-task_class = "analysis"
+level = "light"
 
 [roles.bounded-implementer]
-capability = "standard"
-effort = "medium"
-task_class = "edit"
+level = "standard"
 requires_allowed_writes = true
 
 [roles.verification-runner]
-capability = "standard"
-effort = "high"
-task_class = "execution"
+level = "standard"
+
+[roles.consistency-auditor]
+level = "light"
 
 [roles.adversarial-critic]
-capability = "frontier"
-effort = "xhigh"
-task_class = "review"
+level = "frontier"
 timeout = 3600
