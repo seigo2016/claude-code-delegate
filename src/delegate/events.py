@@ -63,6 +63,16 @@ def emit(task_dir: Path, status: str, **fields: Any) -> dict[str, Any]:
         return updated
 
 
+def update_returning(task_dir: Path, **fields: Any) -> dict[str, Any]:
+    """Record progress and hand back the state, for callers that need it."""
+    with _held(task_dir) as state:
+        if state.get("status") in TERMINAL_STATES:
+            return state
+        updated = {**state, **fields, "updated_at": now_iso()}
+        store.write_json(_state_path(task_dir), updated)
+        return updated
+
+
 def update(task_dir: Path, **fields: Any) -> None:
     """Record progress without logging it.
 

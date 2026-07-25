@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from delegate import diagnose, envelope, events, liveness, store
+from delegate import diagnose, envelope, events, liveness, store, workspace
 from delegate.adapters import registry
 from delegate.adapters.base import WorkerAdapter
 
@@ -102,6 +102,10 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             events.emit(task_dir, "cancelled", terminal_reason="cancelled_before_start")
             return
 
+        state = events.emit(task_dir, "running", started_at=events.now_iso())
+        project_root = Path(state["project_root"])
+        before = workspace.changed_paths(project_root)
+
         # Written per task, so it is right however this package was installed.
         schema_path = task_dir / "result.schema.json"
         store.write_json(schema_path, envelope.json_schema())
@@ -138,13 +142,23 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             events_path.open("wb") as event_sink,
             stderr_path.open("wb") as error_sink,
         ):
-            process = subprocess.Popen(
-                command,
-                stdin=prompt,
-                stdout=event_sink,
-                stderr=error_sink,
-                start_new_session=True,
-            )
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdin=prompt,
+                    stdout=event_sink,
+                    stderr=error_sink,
+                    start_new_session=True,
+                )
+            except OSError as error:
+                events.emit(
+                    task_dir,
+                    "failed",
+                    terminal_reason="launch_error",
+                    launch_error=f"{type(error).__name__}: {error}",
+                    duration_sec=round(time.monotonic() - started, 3),
+                )
+                return
             event_tail = _Tail(events_path)
             stderr_tail = _Tail(stderr_path)
             heartbeat = max(float(os.environ.get("DELEGATE_HEARTBEAT_SEC", "5")), 0.01)
@@ -170,7 +184,19 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             "duration_sec": round(time.monotonic() - started, 3),
             **_snapshot(view),
         }
+        fields.update(_write_scope(project_root, before, task_dir))
         _finish(task_dir, state, view, fields, cancelled=cancelled, timed_out=timed_out)
+
+
+def _write_scope(project_root: Path, before: set[str] | None, task_dir: Path) -> dict[str, Any]:
+    allowed = store.read_json(task_dir / "packet.json")["allowed_writes"]
+    after = workspace.changed_paths(project_root) if before is not None else None
+    if before is None or after is None:
+        return {"write_scope_checked": False, "unauthorized_writes": []}
+    return {
+        "write_scope_checked": True,
+        "unauthorized_writes": workspace.unauthorized(before, after, allowed),
+    }
 
 
 def _absorb(
@@ -230,6 +256,10 @@ def _finish(
             **_keep_last_message(task_dir, view),
             **fields,
         )
+        return
+
+    if fields.get("unauthorized_writes"):
+        events.emit(task_dir, "failed", terminal_reason="write_scope_violation", **fields)
         return
 
     result, source = _result_of(state, view)

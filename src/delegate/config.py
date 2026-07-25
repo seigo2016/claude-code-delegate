@@ -26,6 +26,7 @@ class Role:
     task_class: str
     timeout: int = DEFAULT_TIMEOUT
     requires_allowed_writes: bool = False
+    max_effort_allowed: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,12 +55,20 @@ class Settings:
     workers: dict[str, Worker]
     default_worker: str | None
 
-    def plan(self, role_name: str, *, worker: str | None = None, effort: str | None = None) -> Plan:
+    def plan(
+        self,
+        role_name: str,
+        *,
+        worker: str | None = None,
+        effort: str | None = None,
+    ) -> Plan:
         role = self.roles.get(role_name)
         if role is None:
             known = ", ".join(sorted(self.roles)) or "none configured"
             raise ConfigError(f"unknown role: {role_name} (configured roles: {known})")
 
+        if effort == "max" and not role.max_effort_allowed:
+            raise ConfigError(f"{role.name} does not allow max effort")
         chosen = self._choose_worker(worker)
         model = chosen.models.get(role.capability)
         if not model:
@@ -101,6 +110,7 @@ class Settings:
         return enabled[0]
 
 
+
 def _required(body: dict[str, Any], key: str, where: str) -> Any:
     if key not in body:
         raise ConfigError(f"{where} is missing {key}")
@@ -122,6 +132,7 @@ def load(path: Path) -> Settings:
             task_class=str(_required(body, "task_class", f"roles.{name}")),
             timeout=int(body.get("timeout", DEFAULT_TIMEOUT)),
             requires_allowed_writes=bool(body.get("requires_allowed_writes", False)),
+            max_effort_allowed=bool(body.get("max_effort_allowed", False)),
         )
         for name, body in raw.get("roles", {}).items()
     }

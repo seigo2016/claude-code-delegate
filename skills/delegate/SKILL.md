@@ -60,6 +60,8 @@ Asking for "one line per module" as evidence fails the contract, and you find ou
 
 `bounded-implementer` will refuse an empty `allowed_writes`. That is deliberate: an implementer without a stated scope is an implementer with an unstated one.
 
+The scope is checked, not merely requested: the repository is compared before and after, and a task that wrote outside its scope comes back `failed` with the offending paths. The comparison uses git, so it sees writes inside the work tree and nothing else. Outside it — a home directory, a system path, a network call — the scope is still only a request.
+
 ## 3. Stop
 
 `submit` returns a handle immediately. Record the `task_id`, dispatch anything else that is ready, and end your turn. A hook wakes this session when the task finishes.
@@ -83,7 +85,7 @@ A timeout carries a `failure_class` saying where it stopped, and a worker that p
 ## Other commands
 
 ```bash
-delegate status <task-id> --reason user-requested   # explicit diagnosis only
-delegate cancel <task-id>                           # a task that is wrong or runaway
-delegate reconcile                                  # classify tasks whose worker is gone
+delegate status <task-id>    # explicit diagnosis only, never as a waiting loop
+delegate cancel <task-id>    # a task that is wrong or runaway
+delegate reconcile           # classify tasks whose worker is gone
 ```

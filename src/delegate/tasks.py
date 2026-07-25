@@ -16,6 +16,7 @@ from typing import Any
 
 from delegate import config, envelope, events, store
 from delegate import packet as packet_module
+from delegate.adapters import registry
 
 SETTINGS_FILE = Path(".claude") / "delegate.toml"
 TASK_ROOT = Path(".claude") / "logs" / "delegate"
@@ -141,6 +142,10 @@ def submit(
     plan = settings.plan(role, worker=worker, effort=effort)
     if plan.role.requires_allowed_writes and not value["allowed_writes"]:
         raise SubmitRefused(f"role {role} requires a non-empty allowed_writes")
+    try:
+        registry.get(plan.adapter)
+    except KeyError as error:
+        raise SubmitRefused(str(error)) from error
 
     root = task_root(project_root)
     root.mkdir(parents=True, exist_ok=True)
@@ -204,5 +209,7 @@ def submit(
         start_new_session=True,
         close_fds=True,
     )
-    state = events.emit(task_dir, "running", pid=worker_process.pid, started_at=events.now_iso())
+    # The supervisor reports itself running once it holds the lock. Saying so
+    # here would leave a window where the task looks alive but nothing holds it.
+    state = events.update_returning(task_dir, pid=worker_process.pid)
     return handle_of(state)

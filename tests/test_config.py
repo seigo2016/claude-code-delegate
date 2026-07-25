@@ -68,12 +68,12 @@ def test_a_role_may_carry_its_own_timeout(tmp_path: Path) -> None:
 def test_the_worker_and_the_effort_can_be_chosen_per_task(tmp_path: Path) -> None:
     settings = config.load(write(tmp_path, SETTINGS))
 
-    plan = settings.plan("artifact-auditor", worker="opencode", effort="max")
+    plan = settings.plan("artifact-auditor", worker="opencode", effort="xhigh")
 
     assert (plan.worker, plan.model, plan.effort) == (
         "opencode",
         "anthropic/claude-sonnet-5",
-        "max",
+        "xhigh",
     )
 
 
@@ -161,3 +161,16 @@ def test_a_role_missing_a_required_key_is_reported_not_raised_as_a_key_error(
 
     with pytest.raises(config.ConfigError, match="roles.artifact-auditor is missing capability"):
         config.load(settings)
+
+
+def test_max_effort_needs_a_role_that_allows_it(tmp_path: Path) -> None:
+    settings = config.load(write(tmp_path, SETTINGS))
+
+    with pytest.raises(config.ConfigError, match="artifact-auditor does not allow max effort"):
+        settings.plan("artifact-auditor", effort="max")
+
+
+def test_a_role_that_expects_max_effort_may_be_given_it(tmp_path: Path) -> None:
+    settings = config.load(write(tmp_path, SETTINGS + "\nmax_effort_allowed = true\n"))
+
+    assert settings.plan("adversarial-critic", effort="max").effort == "max"

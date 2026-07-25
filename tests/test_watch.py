@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 from conftest import Workspace
+from delegate import liveness
 
 
 def watch(workspace: Workspace, seconds: str = "1") -> subprocess.CompletedProcess[str]:
@@ -87,3 +88,16 @@ def test_reconcile_reports_a_short_line_per_task_not_the_whole_state(
         "terminal_reason",
         "collected",
     }
+
+
+def test_only_one_watcher_per_project_waits_at_a_time(workspace: Workspace) -> None:
+    # A watcher starts after every Bash call, so without a claim they pile up
+    # and each one wakes the session about the same finished task.
+    workspace.submit()
+    assert watch(workspace, seconds="20").returncode == 0
+
+    lock = workspace.repo / ".claude" / "logs" / "delegate" / "watch.lock"
+    with liveness.hold(lock):
+        second = watch(workspace, seconds="20")
+
+    assert second.returncode != 0

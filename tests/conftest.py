@@ -96,6 +96,12 @@ if mode == "result_in_message_only":
     event({"type": "turn.completed"})
     sys.exit(0)
 
+if mode == "writes_allowed":
+    (pathlib.Path(os.environ["FAKE_CWD"]) / "allowed.txt").write_text("ok")
+
+if mode == "writes_elsewhere":
+    (pathlib.Path(os.environ["FAKE_CWD"]) / "unauthorized.txt").write_text("oops")
+
 if mode == "decision_needed":
     good = {**good, "status": "decision_needed", "decision_needed": "pick a threshold"}
 
@@ -125,6 +131,13 @@ class Workspace:
     mode_file: Path
     calls_file: Path
     env: dict[str, str]
+
+    worker_path: Path
+
+    def remove_worker(self) -> None:
+        """Leave the backend unlaunchable, without falling through to a real one."""
+        self.worker_path.unlink()
+        self.env["PATH"] = str(self.worker_path.parent)
 
     def mode(self, value: str) -> None:
         self.mode_file.write_text(value, encoding="utf-8")
@@ -174,6 +187,7 @@ class Workspace:
 def workspace(tmp_path: Path) -> Workspace:
     repo = tmp_path / "repo"
     (repo / ".claude").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     settings = repo / ".claude" / "delegate.toml"
     settings.write_text(SETTINGS, encoding="utf-8")
 
@@ -194,8 +208,14 @@ def workspace(tmp_path: Path) -> Workspace:
         "PYTHONPATH": src,
         "FAKE_MODE": str(mode_file),
         "FAKE_CALLS": str(calls_file),
+        "FAKE_CWD": str(repo),
         "DELEGATE_HEARTBEAT_SEC": "0.05",
     }
     return Workspace(
-        repo=repo, settings=settings, mode_file=mode_file, calls_file=calls_file, env=env
+        repo=repo,
+        settings=settings,
+        mode_file=mode_file,
+        calls_file=calls_file,
+        env=env,
+        worker_path=worker,
     )

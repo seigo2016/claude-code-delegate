@@ -63,3 +63,5 @@ capability = "frontier"
 effort = "xhigh"
 task_class = "review"
 timeout = 3600
+# Without this, --effort max is refused for this role.
+max_effort_allowed = true

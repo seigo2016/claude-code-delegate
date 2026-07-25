@@ -9,12 +9,15 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from delegate import config, events, liveness, runner, store, tasks
 
 WATCH_POLL_SEC = 1.0
+# How long a supervisor may take to claim its lock before we believe it is gone.
+STARTUP_GRACE_SEC = 30.0
 
 
 def _print(value: dict[str, Any]) -> None:
@@ -158,13 +161,22 @@ def _states(project_root: Path) -> list[dict[str, Any]]:
     return found
 
 
+def _still_starting(state: dict[str, Any]) -> bool:
+    if state["status"] != "starting":
+        return False
+    created = datetime.fromisoformat(str(state["created_at"]))
+    return (datetime.now().astimezone() - created).total_seconds() < STARTUP_GRACE_SEC
+
+
 def cmd_reconcile(args: argparse.Namespace) -> int:
     project_root = _root(args.project_root)
     reconciled = []
     for state in _states(project_root):
         task_dir = Path(state["task_dir"])
-        if state["status"] in events.TERMINAL_STATES or liveness.worker_alive(
-            Path(state["lock_path"])
+        if (
+            state["status"] in events.TERMINAL_STATES
+            or liveness.worker_alive(Path(state["lock_path"]))
+            or _still_starting(state)
         ):
             reconciled.append(state)
             continue
@@ -186,6 +198,17 @@ def cmd_watch(args: argparse.Namespace) -> int:
     session should be left alone.
     """
     project_root = _root(args.project_root)
+    try:
+        with liveness.hold(tasks.task_root(project_root) / "watch.lock"):
+            return _wait_for_something_to_collect(project_root)
+    except liveness.AlreadyHeld:
+        # A watcher starts after every Bash call; without this they would pile
+        # up and each wake the session about the same finished task.
+        _print({"ready": []})
+        return 1
+
+
+def _wait_for_something_to_collect(project_root: Path) -> int:
     limit = float(os.environ.get("DELEGATE_WATCH_SEC", "3600"))
     deadline = time.monotonic() + limit
     while True:
