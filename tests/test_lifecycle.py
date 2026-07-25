@@ -229,3 +229,17 @@ def test_a_worker_that_vanished_is_reclassified_rather_than_left_running(
     reconciled = workspace.run("reconcile")
 
     assert reconciled["tasks"][0]["status"] == "orphaned"
+
+
+def test_a_cancellation_stops_the_worker_without_signalling_the_supervisor(
+    workspace: Workspace,
+) -> None:
+    # Cancel records the request and sends nothing. A signal can arrive before
+    # the supervisor has a handler installed, which would kill it outright and
+    # leave nobody to record the outcome.
+    workspace.mode("silent_hang")
+    handle = workspace.submit()
+
+    workspace.run("cancel", handle["task_id"])
+
+    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "cancelled"

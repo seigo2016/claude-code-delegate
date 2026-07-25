@@ -98,6 +98,9 @@ def run(task_dir: Path) -> int:
 
 def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) -> None:
     with liveness.hold(Path(state["lock_path"])):
+        # A cancellation can land between the handover and this lock. Reading the
+        # state again here is the only way to see one that arrived in that gap.
+        state = store.read_json(task_dir / "state.json")
         if state["status"] == "cancellation_requested":
             events.emit(task_dir, "cancelled", terminal_reason="cancelled_before_start")
             return
@@ -167,6 +170,10 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
 
             while process.poll() is None:
                 now = time.monotonic()
+                if cancelled or _cancellation_recorded(task_dir):
+                    cancelled = True
+                    _terminate(process)
+                    break
                 if now >= deadline:
                     timed_out = True
                     _terminate(process)
@@ -197,6 +204,15 @@ def _write_scope(project_root: Path, before: set[str] | None, task_dir: Path) ->
         "write_scope_checked": True,
         "unauthorized_writes": workspace.unauthorized(before, after, allowed),
     }
+
+
+def _cancellation_recorded(task_dir: Path) -> bool:
+    """A signal can be lost or arrive before there is anything to kill; the
+    record of the cancellation cannot."""
+    try:
+        return store.read_json(task_dir / "state.json")["status"] == "cancellation_requested"
+    except (OSError, ValueError, KeyError):
+        return False
 
 
 def _absorb(
