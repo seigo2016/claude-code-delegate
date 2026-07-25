@@ -71,3 +71,11 @@ def test_a_fenced_answer_is_still_an_answer() -> None:
 def test_prose_is_not_an_answer() -> None:
     assert envelope.from_text("I looked at the files and they seem fine.") is None
     assert envelope.from_text("[1, 2, 3]") is None
+
+
+def test_a_single_overlong_item_cannot_smuggle_a_report_past_the_item_cap() -> None:
+    packed = {**valid(), "observed_facts": ["x" * (envelope.MAX_ITEM_CHARS + 1)]}
+
+    assert envelope.violations(packed) == [
+        f"observed_facts holds an item longer than {envelope.MAX_ITEM_CHARS} characters"
+    ]

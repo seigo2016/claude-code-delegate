@@ -4,6 +4,7 @@
   "properties": {
     "artifact_paths": {
       "items": {
+        "maxLength": 300,
         "type": "string"
       },
       "maxItems": 5,
@@ -11,6 +12,7 @@
     },
     "blockers": {
       "items": {
+        "maxLength": 300,
         "type": "string"
       },
       "maxItems": 5,
@@ -24,6 +26,7 @@
     },
     "observed_facts": {
       "items": {
+        "maxLength": 300,
         "type": "string"
       },
       "maxItems": 5,
@@ -38,6 +41,7 @@
     },
     "verified_comparisons": {
       "items": {
+        "maxLength": 300,
         "type": "string"
       },
       "maxItems": 5,

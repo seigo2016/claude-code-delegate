@@ -89,7 +89,11 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     lines.append("Reply with this JSON object and nothing else. No prose, no code fence:")
     lines.append(json.dumps({field: _SHAPE[field] for field in envelope.FIELDS}, indent=2))
     lines.append("")
-    lines.append(f"Each list holds at most {envelope.MAX_ITEMS} short strings.")
+    lines.append(
+        f"Each list holds at most {envelope.MAX_ITEMS} strings of "
+        f"{envelope.MAX_ITEM_CHARS} characters or fewer. If the answer needs more than "
+        "that, write it to a file you were allowed to write and return its path."
+    )
     lines.append("Cite exact paths. Do not paste raw logs.")
     return "\n".join(lines) + "\n"
 

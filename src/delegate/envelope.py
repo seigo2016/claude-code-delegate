@@ -11,6 +11,9 @@ import json
 from typing import Any
 
 MAX_ITEMS = 5
+# An item is one clause. Without a length cap a worker can honour the item
+# count and still hand back a report, which is the cost we delegated to avoid.
+MAX_ITEM_CHARS = 300
 EVIDENCE_FIELDS = ("observed_facts", "verified_comparisons", "artifact_paths", "blockers")
 FIELDS = ("status", *EVIDENCE_FIELDS, "decision_needed")
 STATUSES = ("completed", "decision_needed")
@@ -39,6 +42,8 @@ def violations(result: Any) -> list[str]:
             problems.append(f"{field} must be an array of strings")
         elif len(value) > MAX_ITEMS:
             problems.append(f"{field} holds more than {MAX_ITEMS} items")
+        elif any(len(item) > MAX_ITEM_CHARS for item in value):
+            problems.append(f"{field} holds an item longer than {MAX_ITEM_CHARS} characters")
 
     decision = result["decision_needed"]
     if decision is not None and not isinstance(decision, str):
@@ -81,7 +86,7 @@ def json_schema() -> dict[str, Any]:
                 field: {
                     "type": "array",
                     "maxItems": MAX_ITEMS,
-                    "items": {"type": "string"},
+                    "items": {"type": "string", "maxLength": MAX_ITEM_CHARS},
                 }
                 for field in EVIDENCE_FIELDS
             },
