@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+dev = ["pytest>=8", "ruff>=0.6", "ty>=0.0.63,<0.1"]
 
 [project.scripts]
 delegate = "delegate.cli:main"
@@ -30,7 +30,5 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
-[tool.mypy]
-python_version = "3.11"
-strict = true
-files = ["src"]
+[tool.ty.src]
+include = ["src", "tests"]
