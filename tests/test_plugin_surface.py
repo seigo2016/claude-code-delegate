@@ -94,3 +94,24 @@ def test_the_example_settings_enable_nothing_the_reader_did_not_choose() -> None
     )
     assert any(line.startswith("[roles.") for line in settings)
     assert any(line.startswith("[workers.") for line in settings)
+
+
+def test_the_entrypoint_says_what_is_missing_when_python_is_too_old(tmp_path: Path) -> None:
+    # macOS ships 3.9 as python3, and tomllib arrived in 3.11. Failing with an
+    # ImportError from a file the reader has never opened helps nobody.
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    for name in ("python3.14", "python3.13", "python3.12", "python3.11", "python3", "python"):
+        stub = fake / name
+        stub.write_text("#!/bin/sh\nexit 1\n")
+        stub.chmod(0o755)
+
+    result = subprocess.run(
+        [str(ROOT / "bin" / "delegate"), "reconcile"],
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{fake}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode != 0
+    assert "3.11" in result.stderr
