@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import os
-import signal
 import sys
 import time
 from datetime import datetime
@@ -130,12 +128,10 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     if state["status"] in events.TERMINAL_STATES:
         _print(state)
         return 0
-    state = events.emit(task_dir, "cancellation_requested")
-    pid = state.get("pid")
-    if isinstance(pid, int) and liveness.worker_alive(Path(state["lock_path"])):
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.kill(pid, signal.SIGTERM)
-    _print(state)
+    # Recording the request is enough: the supervisor reads it within a poll and
+    # stops the worker itself. Signalling it here could instead kill it outright,
+    # before it has installed a handler, leaving nobody to record the outcome.
+    _print(events.emit(task_dir, "cancellation_requested"))
     return 0
 
 

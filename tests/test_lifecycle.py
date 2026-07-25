@@ -229,3 +229,24 @@ def test_a_worker_that_vanished_is_reclassified_rather_than_left_running(
     reconciled = workspace.run("reconcile")
 
     assert reconciled["tasks"][0]["status"] == "orphaned"
+
+
+def test_a_cancellation_stops_the_worker_even_if_no_signal_arrives(
+    workspace: Workspace,
+) -> None:
+    # The signal can be sent before the worker exists, or be lost. The record of
+    # the cancellation is what the supervisor must act on.
+    workspace.mode("silent_hang")
+    handle = workspace.submit()
+    task_dir = workspace.repo / ".claude" / "logs" / "delegate" / handle["task_id"]
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        state = json.loads((task_dir / "state.json").read_text(encoding="utf-8"))
+        if state["status"] == "running":
+            break
+        time.sleep(0.05)
+
+    state["status"] = "cancellation_requested"
+    (task_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "cancelled"
