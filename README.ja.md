@@ -1,34 +1,56 @@
 # claude-code-delegate
 
-Claude Code から外部 CLI agent へ、非同期に委譲し、確実に回収する。
+[![ci](https://github.com/seigo2016/claude-code-delegate/actions/workflows/ci.yml/badge.svg)](https://github.com/seigo2016/claude-code-delegate/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[English](README.md)
+[English](README.md) | [日本語](README.ja.md)
 
-判断する場所は Claude Code のままにし、作業そのものは Codex / OpenCode / headless の Claude へ出します。生成物の確認、repository の把握、承認済みの変更の適用、検査の実行。返ってくるのは実行記録ではなく、短い証拠です。
+**外に出せる作業に context を使わない。**
 
-poll はしません。session は task を渡したら turn を終え、回収すべきものができたときだけ起こされます。
+claude-code-delegate は、Claude Code から境界の決まった作業を Codex / OpenCode / headless の Claude へ渡し、実行記録ではなく数行の証拠を受け取る plugin です。poll はしません。session は task を渡したら turn を終え、回収できるものができたときだけ起こされます。
 
-## なぜ
+## 解決したい問題
 
-長い Claude Code の session は context を使い切ります。しかも使い切る先が間違っています。log の出力、ファイルの中身、ディレクトリの一覧、同じ確認の繰り返し。context を必要としていた判断が、必要としていなかった作業に押し出されます。
+長い session は context を使い切ります。使い切る先は、log の出力、ファイルの中身、ディレクトリの一覧、同じ確認の繰り返しです。context を必要とする判断が、必要としない作業に押し出されます。
 
-作業を外へ出すこと自体は簡単です。この道具が引き受けるのは**安全に出す**部分です。止まった、死んだ、何も返さなかった、答えらしく見えるだけのものを返した — そのどれもが成功として返ってきてはいけません。
+作業を外へ出すこと自体は難しくありません。難しいのは失敗したときの扱いです。止まった、死んだ、何も返さなかった、答えらしく見えるだけのものを返した。これらが成功として返ってくると、context と引き換えに疑いを持ち込むことになります。
 
-## 導入
-
-Python 3.11 以上と、`codex` / `opencode` / `claude` のいずれかが PATH にあること。Linux と macOS。
+## 5 分で試す
 
 ```bash
-git clone https://github.com/seigo2016/claude-code-delegate
-claude plugin marketplace add ./claude-code-delegate
+claude plugin marketplace add seigo2016/claude-code-delegate
 claude plugin install delegate@claude-code-delegate --scope project
+
+cp examples/delegate.toml .claude/delegate.toml
+# worker を 1 つ enabled = true にし、model を書く
+
+cat > /tmp/packet.json <<'JSON'
+{
+  "objective": "Check that CHANGELOG.md lists every tag reachable from main.",
+  "read": ["CHANGELOG.md"],
+  "allowed_writes": [],
+  "required_evidence": ["tags missing from the changelog", "tags listed but not in git"],
+  "host_only": false
+}
+JSON
+
+delegate submit --role artifact-auditor --title changelog --packet /tmp/packet.json
+# → {"task_id": "…", "status": "starting", "worker": "claude", "model": "sonnet"}
+
+delegate collect <task-id>
 ```
 
-install しても session は何も変わりません。agent は差し替わらず、tool は外れず、宣言するまでどの backend も有効になりません。
+Claude Code の session では `/delegate` skill が同じ流れを担当し、task の完了時に hook が session を起こします。
+
+## 必要なもの
+
+- PATH 上の Python 3.11 以上。設定の読み込みに `tomllib` を使うためです。3.11 で標準ライブラリに入ったもので、macOS の `python3` は 3.9 のことが多いため、別途用意が必要です。他に依存はありません。
+- `codex` / `opencode` / `claude` のいずれか。
+- Linux または macOS。Windows は WSL 経由。
+
+plugin を install しても、main agent は差し替わらず、tool も外れず、backend も設定で宣言するまで 1 つも使われません。
 
 ## 設定
-
-`examples/delegate.toml` を repository の `.claude/delegate.toml` に複製し、実際に使える model を書き、worker を 1 つ有効にします。
 
 ```toml
 default_worker = "claude"
@@ -44,65 +66,50 @@ effort = "high"
 task_class = "review"
 ```
 
-role が要求するのは capability (light / standard / frontier の 3 段階) であって model 名ではないため、backend を変えても role はそのまま使えます。選んだ worker にその段階の model がなければ、task は何も起動する前に拒否されます。
+role が指定するのは capability であり、model 名ではありません。そのため backend を変えても role の定義は変わりません。選んだ worker にその capability の model が設定されていなければ、worker を起動する前に拒否します。
 
-| adapter | 起動 | 答えの受け取り |
+| adapter | 起動 | 結果の受け取り |
 |---|---|---|
-| `codex` | `codex exec --json` | 出力ファイル。加えて JSON schema で拘束する |
+| `codex` | `codex exec --json` | 出力ファイル。JSON schema でも拘束する |
 | `opencode` | `opencode run --format json` | 最後の text part |
 | `claude` | `claude -p --output-format stream-json` | 終了時の result event |
 
-## 使う
+同梱の role は `artifact-auditor` / `repo-cartographer` / `bounded-implementer` / `verification-runner` / `consistency-auditor` / `adversarial-critic` です。
 
-Claude Code の session からは `/delegate` skill が一連の流れを担います。直接使う場合:
+## 返ってくるもの
 
-```bash
-delegate submit --role artifact-auditor --title changelog-vs-tags --packet packet.json
-# → {"task_id": "…", "status": "starting", "worker": "claude", "model": "sonnet"}
-
-delegate collect <task-id>
-```
-
-packet に書くのは、この task が固有に足す情報だけです。role の指示、model、禁止事項、結果契約は自動で付きます。
-
-```json
-{
-  "objective": "Check that CHANGELOG.md lists every tag reachable from main.",
-  "read": ["CHANGELOG.md"],
-  "allowed_writes": [],
-  "required_evidence": ["tags missing from the changelog", "tags listed but not in git"],
-  "host_only": false
-}
-```
-
-session から出してはいけない仕事 — live な session state を要するもの、人が責任を負う判断 — は `"host_only": true` を付ければ、送られずに拒否されます。
-
-## しないこと
-
-受け取った結果は、そのまま次の行動に使えるものであること。
-
-| 起きたこと | 返るもの |
+| 起きたこと | 返る状態 |
 |---|---|
 | tool 呼び出しが返らない | `timeout` / `failure_class: tool_stall` |
-| 応答は完成したが結果を渡さない | `timeout` / `finalization_timeout`。最後のメッセージは別に退避 |
+| 応答は完了したが結果を渡さない | `timeout` / `finalization_timeout`。最後のメッセージは別に保存 |
 | 非ゼロ終了 | `failed` / `nonzero_exit` |
-| 何も生成しない | `failed` / `empty_result` |
-| 契約を満たさない答え | `failed` / `invalid_result` と、その理由 |
-| 宣言した範囲の外へ書いた | `failed` / `write_scope_violation` と、その path |
-| 実行中に機械が落ちた | `orphaned`。結果が残っていれば `degraded` |
+| 結果を出力しない | `failed` / `empty_result` |
+| 形式を満たさない結果 | `failed` / `invalid_result` と、その理由 |
+| 宣言した範囲の外へ書き込んだ | `failed` / `write_scope_violation` と、その path |
+| 実行中に機械が停止した | `orphaned`。結果が残っていれば `degraded` |
 
-正しい答えに**見えるだけ**のメッセージが、正常な結果へ昇格することはありません。task の隣に置かれるので、読んでから判断してください。
+正しい結果に見えるだけのメッセージを、正常な結果として扱うことはありません。task directory に保存するので、読んでから判断してください。
 
-結果は 1 つの list につき 300 文字以内の文字列 5 件までです。この上限が製品そのものです。一目で読めない答えは、委譲したはずのコストを session へ戻しています。本当に長い一覧が答えになる場合は、worker にファイルを書かせて path を返させてください。
+結果は 1 つの list につき、300 文字以内の文字列を 5 件までです。一目で読めない量を返されると、委譲して減らしたはずの context を session 側で使うことになります。長い一覧が必要な場合は、worker にファイルを書かせて path を返させてください。
 
-## 限界
+session の外へ出せない作業もあります。live な session state を必要とするもの、人が責任を負う判断がそれにあたります。`"host_only": true` を付けると、送信せずに拒否します。
 
-境界があると信じているのに実際には無い状態は、最初から無いより悪いので、そのまま書きます。
+## コマンド
 
-- **書き込み範囲の検査は git で行うため、work tree の中しか見えません。** home ディレクトリ、システムパス、ネットワーク越しの書き込みは観測できません。git のない repository では検査自体を行わず、その旨を task の状態に残します。
-- **sandbox はありません。** worker はそれぞれの CLI が与える権限で動きます。
-- **adapter は変化する 3 つの CLI に追従しています。** event の形は実行を観測して採取したもので、backend の更新で変わり得ます。
-- **`fcntl` を使うので Linux と macOS のみです。** Windows は WSL 経由。
+| コマンド | 用途 |
+|---|---|
+| `delegate submit --role R --title T --packet P` | worker を起動し handle を受け取る |
+| `delegate collect <task-id>` | 結果を 1 度だけ回収する |
+| `delegate status <task-id>` | 明示的な診断。待機ループには使わない |
+| `delegate cancel <task-id>` | 誤った task や暴走した task を止める |
+| `delegate reconcile` | worker が消えた task を分類する |
+| `delegate watch` | hook が実行する。回収できるものを待つ |
+
+## 制約
+
+- **書き込み範囲の検査は git で行うため、work tree の中しか見えません。** home ディレクトリ、システムパス、ネットワーク越しの書き込みは検出できません。git 管理下にない repository では検査を行わず、その旨を task の状態に記録します。
+- **sandbox はありません。** worker は各 CLI が与える権限で動作します。
+- **adapter は 3 つの CLI の出力形式に依存しています。** 形式は実行を観測して確認したもので、backend の更新で変わる可能性があります。
 
 ## 開発
 
@@ -113,7 +120,7 @@ uv run ruff check .
 uv run ty check
 ```
 
-テストは代役の worker を動かします。止まる、死ぬ、何も返さない、答えらしく見えるだけのものを返す。これらを指示どおりに起こせるので、上の失敗処理は主張ではなく検証されています。
+テストでは代役の worker を使います。止まる、死ぬ、何も返さない、答えらしく見えるだけのものを返す、といった状態を指示どおりに再現できるため、上記の失敗の扱いは実際に検証されています。
 
 ## License
 

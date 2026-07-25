@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 # Runs the delegate CLI straight from this checkout, with no install step.
+#
+# The interpreter is chosen rather than assumed: macOS still ships 3.9 as
+# python3, and the settings reader needs tomllib, which arrived in 3.11.
 set -euo pipefail
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec env PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}" python3 -m delegate "$@"
+
+for candidate in python3.14 python3.13 python3.12 python3.11 python3 python; do
+  if command -v "$candidate" >/dev/null 2>&1 &&
+    "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' \
+      >/dev/null 2>&1; then
+    exec env PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}" "$candidate" -m delegate "$@"
+  fi
+done
+
+echo "delegate needs Python 3.11 or newer on PATH; none was found." >&2
+echo "Tried: python3.14 python3.13 python3.12 python3.11 python3 python" >&2
+exit 2
