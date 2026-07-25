@@ -7,6 +7,7 @@ delegating the work in the first place.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 MAX_ITEMS = 5
@@ -45,6 +46,25 @@ def violations(result: Any) -> list[str]:
     elif result["status"] == "decision_needed" and not decision:
         problems.append("status is decision_needed but decision_needed is empty")
     return problems
+
+
+def from_text(text: str) -> dict[str, Any] | None:
+    """The result object inside a worker's message, or None if there isn't one.
+
+    Models wrap JSON in a code fence often enough that refusing a fenced answer
+    would fail runs that did the work correctly.
+    """
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("\n", 1)[-1] if "\n" in stripped else ""
+        fence = stripped.rfind("```")
+        if fence != -1:
+            stripped = stripped[:fence]
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def json_schema() -> dict[str, Any]:

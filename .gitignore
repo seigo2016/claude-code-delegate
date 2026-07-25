@@ -8,3 +8,4 @@ docs/design/
 uv.lock
 .ty_cache/
 .venv/
+.claude/logs/

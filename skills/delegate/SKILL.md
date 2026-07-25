@@ -46,6 +46,18 @@ delegate submit --role artifact-auditor --title changelog-vs-tags --packet /tmp/
 
 Role instructions, the model, the prohibitions and the result contract are added for you. Do not repeat them in the packet.
 
+**A result holds at most five short strings per list.** That cap is the point: a worker that hands back forty lines has moved the reading back into this session. When the answer is genuinely a long list — an inventory, a full mapping, every occurrence of something — ask for it as a file and let the worker return the path:
+
+```json
+{
+  "objective": "Write an inventory of every module under src/ to docs/inventory.md, one line each.",
+  "allowed_writes": ["docs/inventory.md"],
+  "required_evidence": ["module count", "the path written"]
+}
+```
+
+Asking for "one line per module" as evidence fails the contract, and you find out after the work is done rather than before.
+
 `bounded-implementer` will refuse an empty `allowed_writes`. That is deliberate: an implementer without a stated scope is an implementer with an unstated one.
 
 ## 3. Stop

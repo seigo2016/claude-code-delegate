@@ -59,3 +59,15 @@ def test_a_result_that_asks_for_a_decision_must_say_what_the_decision_is() -> No
 
 def test_the_shipped_schema_is_generated_from_the_same_definition() -> None:
     assert json.loads(SCHEMA_FILE.read_text(encoding="utf-8")) == envelope.json_schema()
+
+
+def test_a_fenced_answer_is_still_an_answer() -> None:
+    fenced = "```json\n" + json.dumps(valid()) + "\n```"
+
+    assert envelope.from_text(fenced) == valid()
+    assert envelope.from_text(json.dumps(valid())) == valid()
+
+
+def test_prose_is_not_an_answer() -> None:
+    assert envelope.from_text("I looked at the files and they seem fine.") is None
+    assert envelope.from_text("[1, 2, 3]") is None

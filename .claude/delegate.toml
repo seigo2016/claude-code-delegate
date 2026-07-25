@@ -1,0 +1,53 @@
+# This repository's own delegation settings. It develops itself with itself.
+
+default_worker = "claude"
+
+[workers.claude]
+adapter = "claude"
+enabled = true
+models = { light = "haiku", standard = "sonnet", frontier = "opus" }
+
+# OpenCode Go has a monthly allowance, so it is chosen per task rather than
+# being the default. The frontier tier here is an implementation escalation, not
+# a reviewer; adversarial review belongs on the claude worker.
+[workers.opencode]
+adapter = "opencode"
+enabled = true
+models = { light = "opencode-go/deepseek-v4-flash", standard = "opencode-go/kimi-k2.7-code", frontier = "opencode-go/glm-5.2" }
+
+[workers.codex]
+adapter = "codex"
+enabled = false
+models = { light = "gpt-5.6-luna", standard = "gpt-5.6-terra", frontier = "gpt-5.6-sol" }
+
+[roles.artifact-auditor]
+capability = "standard"
+effort = "high"
+task_class = "review"
+
+[roles.repo-cartographer]
+capability = "light"
+effort = "high"
+task_class = "analysis"
+
+[roles.bounded-implementer]
+capability = "standard"
+effort = "medium"
+task_class = "edit"
+requires_allowed_writes = true
+
+[roles.verification-runner]
+capability = "standard"
+effort = "high"
+task_class = "execution"
+
+[roles.consistency-auditor]
+capability = "light"
+effort = "high"
+task_class = "review"
+
+[roles.adversarial-critic]
+capability = "frontier"
+effort = "xhigh"
+task_class = "review"
+timeout = 3600

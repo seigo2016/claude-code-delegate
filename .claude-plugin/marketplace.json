@@ -1,0 +1,15 @@
+{
+  "name": "claude-code-delegate",
+  "description": "Asynchronous, auditable delegation from Claude Code to external CLI agents.",
+  "owner": {
+    "name": "seigo2016",
+    "email": "mail@seigo2016.com"
+  },
+  "plugins": [
+    {
+      "name": "delegate",
+      "source": "./",
+      "description": "Hand bounded work to Codex, OpenCode, or headless Claude; collect the result without polling."
+    }
+  ]
+}

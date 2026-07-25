@@ -15,12 +15,20 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from delegate import config, events, store
+from delegate import config, envelope, events, store
 from delegate import packet as packet_module
 
 SETTINGS_FILE = Path(".claude") / "delegate.toml"
 TASK_ROOT = Path(".claude") / "logs" / "delegate"
 CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md")
+_SHAPE = {
+    "status": "completed | decision_needed",
+    "observed_facts": ["what you saw, each with the path it came from"],
+    "verified_comparisons": ["what you checked against what, and the outcome"],
+    "artifact_paths": ["paths a reader should open"],
+    "blockers": ["what stopped you, if anything"],
+    "decision_needed": "the question only the caller can answer, or null",
+}
 FORBIDDEN = (
     "destructive writes",
     "changes outside the stated write scope",
@@ -75,7 +83,13 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     lines.extend(f"- {item}" for item in forbidden)
     lines.append("Bring back evidence for:")
     lines.extend(f"- {item}" for item in value["required_evidence"])
-    lines.append("Return only the JSON object required by the supplied output schema.")
+    lines.append("")
+    # Only one backend can be handed a schema, so the shape is stated here for
+    # all of them. Without it a worker invents its own and the run is wasted.
+    lines.append("Reply with this JSON object and nothing else. No prose, no code fence:")
+    lines.append(json.dumps({field: _SHAPE[field] for field in envelope.FIELDS}, indent=2))
+    lines.append("")
+    lines.append(f"Each list holds at most {envelope.MAX_ITEMS} short strings.")
     lines.append("Cite exact paths. Do not paste raw logs.")
     return "\n".join(lines) + "\n"
 

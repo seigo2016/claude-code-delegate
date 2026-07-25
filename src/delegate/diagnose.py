@@ -6,7 +6,6 @@ costs the same as watching a short one.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, replace
 
 from delegate import envelope
@@ -61,11 +60,8 @@ def has_usable_result(view: RunView) -> bool:
     """Whether the worker's last message would have been a valid result."""
     if view.last_agent_message is None:
         return False
-    try:
-        parsed = json.loads(view.last_agent_message)
-    except json.JSONDecodeError:
-        return False
-    return envelope.violations(parsed) == []
+    parsed = envelope.from_text(view.last_agent_message)
+    return parsed is not None and envelope.violations(parsed) == []
 
 
 def classify_timeout(view: RunView) -> str:

@@ -64,7 +64,7 @@ def _keep_last_message(task_dir: Path, view: diagnose.RunView) -> dict[str, Any]
     }
     if diagnose.has_usable_result(view):
         recovered = task_dir / "recovered-result.json"
-        store.write_json(recovered, json.loads(view.last_agent_message))
+        store.write_json(recovered, envelope.from_text(view.last_agent_message) or {})
         fields["recovery_status"] = "usable"
         fields["recovered_result_path"] = str(recovered)
     return fields
@@ -188,11 +188,7 @@ def _result_of(state: dict[str, Any], view: diagnose.RunView) -> tuple[dict[str,
         except (OSError, ValueError, json.JSONDecodeError):
             return {}, "file"
     if view.last_agent_message is not None:
-        try:
-            parsed = json.loads(view.last_agent_message)
-        except json.JSONDecodeError:
-            return {}, "final_message"
-        return (parsed if isinstance(parsed, dict) else {}), "final_message"
+        return envelope.from_text(view.last_agent_message) or {}, "final_message"
     return None, "none"
 
 
