@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -133,33 +134,73 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _line(state: dict[str, Any]) -> dict[str, Any]:
+    """One task, short enough to read at a glance in a session start."""
+    return {
+        "task_id": state["task_id"],
+        "title": state["title"],
+        "role": state["role"],
+        "status": state["status"],
+        "terminal_reason": state.get("terminal_reason"),
+        "collected": bool(state.get("delivered_at")),
+    }
+
+
+def _states(project_root: Path) -> list[dict[str, Any]]:
+    found = []
+    for projection in sorted(tasks.task_root(project_root).glob("*/state.json")):
+        try:
+            found.append(store.read_json(projection))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return found
+
+
 def cmd_reconcile(args: argparse.Namespace) -> int:
     project_root = _root(args.project_root)
     reconciled = []
-    for projection in sorted(tasks.task_root(project_root).glob("*/state.json")):
-        try:
-            state = store.read_json(projection)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        if state["status"] in events.TERMINAL_STATES:
-            reconciled.append(state)
-            continue
-        if liveness.worker_alive(Path(state["lock_path"])):
+    for state in _states(project_root):
+        task_dir = Path(state["task_dir"])
+        if state["status"] in events.TERMINAL_STATES or liveness.worker_alive(
+            Path(state["lock_path"])
+        ):
             reconciled.append(state)
             continue
         result_path = Path(state["result_path"])
         if result_path.exists() and result_path.stat().st_size:
             reconciled.append(
-                events.emit(
-                    projection.parent, "degraded", terminal_reason="worker_gone_with_result"
-                )
+                events.emit(task_dir, "degraded", terminal_reason="worker_gone_with_result")
             )
         else:
-            reconciled.append(
-                events.emit(projection.parent, "orphaned", terminal_reason="worker_gone")
-            )
-    _print({"tasks": reconciled})
+            reconciled.append(events.emit(task_dir, "orphaned", terminal_reason="worker_gone"))
+    _print({"tasks": [_line(state) for state in reconciled]})
     return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Wait until something is worth waking the session for.
+
+    Exit 0 means there is a finished, uncollected task. Any other exit means the
+    session should be left alone.
+    """
+    project_root = _root(args.project_root)
+    limit = float(os.environ.get("DELEGATE_WATCH_SEC", "3600"))
+    deadline = time.monotonic() + limit
+    while True:
+        states = _states(project_root)
+        ready = [
+            state
+            for state in states
+            if state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
+        ]
+        if ready:
+            _print({"ready": [_line(state) for state in ready]})
+            return 0
+        waiting = any(state["status"] in events.ACTIVE_STATES for state in states)
+        if not waiting or time.monotonic() >= deadline:
+            _print({"ready": []})
+            return 1
+        time.sleep(0.2)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -197,6 +238,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     reconcile = with_root(sub.add_parser("reconcile", help="classify tasks whose worker is gone"))
     reconcile.set_defaults(func=cmd_reconcile)
+
+    watch = with_root(sub.add_parser("watch", help="wait until a task is worth collecting"))
+    watch.set_defaults(func=cmd_watch)
 
     run = sub.add_parser("_run", help=argparse.SUPPRESS)
     run.add_argument("task_dir")

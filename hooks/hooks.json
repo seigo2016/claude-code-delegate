@@ -1,0 +1,31 @@
+{
+  "description": "Wake the session when a delegated task finishes, and clean up after workers that did not survive.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/delegate\" reconcile --project-root \"${CLAUDE_PROJECT_DIR:-$PWD}\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/delegate\" watch --project-root \"${CLAUDE_PROJECT_DIR:-$PWD}\"",
+            "timeout": 3900,
+            "asyncRewake": true,
+            "rewakeMessage": "A delegated task finished. Collect its result with `delegate collect <task-id>`, weigh the evidence, and carry on with what the user asked for.",
+            "rewakeSummary": "Delegated task finished"
+          }
+        ]
+      }
+    ]
+  }
+}

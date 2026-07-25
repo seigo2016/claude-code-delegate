@@ -1,0 +1,65 @@
+# Copy to .claude/delegate.toml in your repository, fill in the models you
+# actually have, and set enabled = true on the one you want to use.
+#
+# Nothing here is on by default. Until a worker is enabled, `delegate submit`
+# refuses and tells you so, and the plugin changes nothing about your session.
+
+default_worker = "codex"
+
+# --- workers ---------------------------------------------------------------
+#
+# A worker maps the three capability tiers onto models you can actually reach.
+# Leave a tier empty and any role asking for it is refused before launch.
+
+[workers.codex]
+adapter = "codex"
+enabled = false
+models = { light = "gpt-5.6-luna", standard = "gpt-5.6-terra", frontier = "gpt-5.6-sol" }
+
+[workers.opencode]
+adapter = "opencode"
+enabled = false
+# Run `opencode models` and use the provider/model form it prints.
+models = { light = "", standard = "", frontier = "" }
+
+[workers.claude]
+adapter = "claude"
+enabled = false
+models = { light = "haiku", standard = "sonnet", frontier = "opus" }
+
+# --- roles -----------------------------------------------------------------
+#
+# A role asks for a capability, never for a model, so the same roles work
+# whichever worker you enabled above.
+
+[roles.artifact-auditor]
+capability = "standard"
+effort = "high"
+task_class = "review"
+
+[roles.repo-cartographer]
+capability = "light"
+effort = "high"
+task_class = "analysis"
+
+[roles.bounded-implementer]
+capability = "standard"
+effort = "medium"
+task_class = "edit"
+requires_allowed_writes = true
+
+[roles.verification-runner]
+capability = "standard"
+effort = "high"
+task_class = "execution"
+
+[roles.consistency-auditor]
+capability = "light"
+effort = "high"
+task_class = "review"
+
+[roles.adversarial-critic]
+capability = "frontier"
+effort = "xhigh"
+task_class = "review"
+timeout = 3600

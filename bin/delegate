@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Runs the delegate CLI straight from this checkout, with no install step.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec env PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}" python3 -m delegate "$@"
