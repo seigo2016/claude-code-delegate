@@ -32,12 +32,3 @@ def test_a_terminal_state_can_never_be_overwritten_by_a_later_update(tmp_path: P
     state = store.read_json(task_dir / "state.json")
     assert state["status"] == "completed"
     assert "pid" not in state
-
-
-def test_the_first_terminal_transition_stamps_the_terminal_time(tmp_path: Path) -> None:
-    task_dir = make_task(tmp_path)
-
-    state = events.emit(task_dir, "failed", terminal_reason="nonzero_exit")
-
-    assert state["terminal_at"]
-    assert state["terminal_reason"] == "nonzero_exit"

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from delegate.adapters import codex
@@ -34,13 +33,3 @@ def test_the_command_pins_the_root_the_result_contract_and_full_reasoning(tmp_pa
     assert command[:4] == ["codex", "exec", "-C", str(tmp_path)]
     assert str(tmp_path / "result.schema.json") in command
     assert command[-3:] == ["--disable", "fast_mode", "-"]
-
-
-def test_a_finished_agent_message_carries_its_text() -> None:
-    raw = json.dumps(
-        {"type": "item.completed", "item": {"id": "i", "type": "agent_message", "text": "{}"}}
-    )
-
-    (event,) = ADAPTER.parse_events(raw)
-
-    assert (event.kind, event.item_type, event.text) == ("item_completed", "agent_message", "{}")

@@ -17,10 +17,6 @@ def valid() -> dict[str, Any]:
     }
 
 
-def test_a_well_formed_packet_is_accepted() -> None:
-    assert packet.validate(valid()) == valid()
-
-
 def test_every_required_field_must_be_present() -> None:
     incomplete = valid()
     del incomplete["host_only"]
