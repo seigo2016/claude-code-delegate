@@ -3,6 +3,9 @@
 The broker never reads a backend's own event format. Each adapter maps its
 backend onto these few kinds, and the stall diagnosis works off those alone, so
 adding a backend cannot change how failures are classified.
+
+One line of backend output can mean more than one thing at once, so parsing
+returns a list.
 """
 
 from __future__ import annotations
@@ -37,12 +40,13 @@ class WorkerAdapter(Protocol):
         self,
         *,
         project_root: Path,
+        prompt_path: Path,
         result_path: Path,
         schema_path: Path,
         model: str,
         effort: str,
     ) -> list[str]: ...
 
-    def parse_event(self, raw_line: str) -> NormalizedEvent | None: ...
+    def parse_events(self, raw_line: str) -> list[NormalizedEvent]: ...
 
-    def parse_stderr_line(self, raw_line: str) -> NormalizedEvent | None: ...
+    def parse_stderr_lines(self, raw_line: str) -> list[NormalizedEvent]: ...

@@ -100,6 +100,7 @@ def run(task_dir: Path) -> int:
 
         command = adapter.build_command(
             project_root=Path(state["project_root"]),
+            prompt_path=Path(state["prompt_path"]),
             result_path=Path(state["result_path"]),
             schema_path=schema_path,
             model=str(state["model"]),
@@ -169,14 +170,30 @@ def _absorb(
     view: diagnose.RunView, adapter: Any, event_tail: _Tail, stderr_tail: _Tail
 ) -> diagnose.RunView:
     for line in event_tail.lines():
-        event = adapter.parse_event(line)
-        if event is not None:
+        for event in adapter.parse_events(line):
             view = diagnose.observe(view, event)
     for line in stderr_tail.lines():
-        event = adapter.parse_stderr_line(line)
-        if event is not None:
+        for event in adapter.parse_stderr_lines(line):
             view = diagnose.observe(view, event)
     return view
+
+
+def _result_of(state: dict[str, Any], view: diagnose.RunView) -> tuple[dict[str, Any] | None, str]:
+    """The result the worker produced, from a file if it can write one, else from
+    its last message. ``None`` means it produced nothing to judge."""
+    result_path = Path(state["result_path"])
+    if result_path.exists() and result_path.stat().st_size:
+        try:
+            return store.read_json(result_path), "file"
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}, "file"
+    if view.last_agent_message is not None:
+        try:
+            parsed = json.loads(view.last_agent_message)
+        except json.JSONDecodeError:
+            return {}, "final_message"
+        return (parsed if isinstance(parsed, dict) else {}), "final_message"
+    return None, "none"
 
 
 def _finish(
@@ -212,8 +229,8 @@ def _finish(
         )
         return
 
-    result_path = Path(state["result_path"])
-    if not result_path.exists() or result_path.stat().st_size == 0:
+    result, source = _result_of(state, view)
+    if result is None:
         events.emit(
             task_dir,
             "failed",
@@ -222,10 +239,11 @@ def _finish(
             **fields,
         )
         return
-    try:
-        result = store.read_json(result_path)
-    except (OSError, ValueError, json.JSONDecodeError):
-        result = {}
+    if source == "final_message":
+        # Only one backend can be handed an output path; the others answer in
+        # their last message. Recording it here means the rest of the system,
+        # and anyone reading the task afterwards, sees one kind of result.
+        store.write_json(Path(state["result_path"]), result)
     problems = envelope.violations(result)
     if problems:
         events.emit(

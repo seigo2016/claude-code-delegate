@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from delegate.adapters.base import WorkerAdapter
+from delegate.adapters.claude import ClaudeAdapter
 from delegate.adapters.codex import CodexAdapter
+from delegate.adapters.opencode import OpenCodeAdapter
 
-_ADAPTERS: dict[str, WorkerAdapter] = {"codex": CodexAdapter()}
+_ADAPTERS: dict[str, WorkerAdapter] = {
+    "claude": ClaudeAdapter(),
+    "codex": CodexAdapter(),
+    "opencode": OpenCodeAdapter(),
+}
 
 
 def get(name: str) -> WorkerAdapter:

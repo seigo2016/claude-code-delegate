@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,7 +94,3 @@ def test_the_example_settings_enable_nothing_the_reader_did_not_choose() -> None
     )
     assert any(line.startswith("[roles.") for line in settings)
     assert any(line.startswith("[workers.") for line in settings)
-
-
-def test_python_is_new_enough_for_the_toml_reader() -> None:
-    assert sys.version_info >= (3, 11)

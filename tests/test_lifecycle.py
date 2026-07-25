@@ -116,6 +116,22 @@ def test_a_worker_that_exits_nonzero_is_a_failure(workspace: Workspace) -> None:
     assert state["terminal_reason"] == "nonzero_exit"
 
 
+def test_a_backend_that_cannot_write_a_result_file_still_delivers_one(
+    workspace: Workspace,
+) -> None:
+    # Only Codex can be handed an output path. OpenCode and claude return their
+    # answer as the final message, so the result has to be taken from there.
+    workspace.mode("result_in_message_only")
+    handle = submit(workspace)
+
+    state = wait_for_terminal(workspace, handle["task_id"])
+
+    assert state["status"] == "completed"
+    assert workspace.run("collect", handle["task_id"])["result"]["observed_facts"] == [
+        "the fake worker ran"
+    ]
+
+
 def test_a_worker_that_writes_no_result_is_a_failure(workspace: Workspace) -> None:
     workspace.mode("empty_result")
     handle = submit(workspace)

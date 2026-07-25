@@ -90,6 +90,12 @@ if mode == "invalid_result":
     event({"type": "turn.completed"})
     sys.exit(0)
 
+if mode == "result_in_message_only":
+    event({"type": "item.completed",
+           "item": {"id": "i-2", "type": "agent_message", "text": json.dumps(good)}})
+    event({"type": "turn.completed"})
+    sys.exit(0)
+
 if mode == "decision_needed":
     good = {**good, "status": "decision_needed", "decision_needed": "pick a threshold"}
 
