@@ -68,3 +68,33 @@ def test_a_task_that_has_only_just_been_handed_over_is_not_declared_lost(
     (reconciled,) = workspace.run("reconcile")["tasks"]
 
     assert reconciled["status"] == "starting"
+
+
+def test_a_worker_that_vanished_after_writing_a_result_is_degraded_not_orphaned(
+    workspace: Workspace,
+) -> None:
+    # The two say different things to the caller: one produced nothing, the
+    # other left something worth reading.
+    task_dir = workspace.repo / ".claude" / "logs" / "delegate" / "vanished"
+    task_dir.mkdir(parents=True)
+    (task_dir / "result.json").write_text("{}", encoding="utf-8")
+    (task_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "task_id": "vanished",
+                "title": "t",
+                "role": "artifact-auditor",
+                "status": "running",
+                "created_at": events.now_iso(),
+                "task_dir": str(task_dir),
+                "lock_path": str(task_dir / "worker.lock"),
+                "result_path": str(task_dir / "result.json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    (reconciled,) = workspace.run("reconcile")["tasks"]
+
+    assert reconciled["status"] == "degraded"
+    assert reconciled["terminal_reason"] == "worker_gone_with_result"
