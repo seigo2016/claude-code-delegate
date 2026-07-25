@@ -1,45 +1,56 @@
 # claude-code-delegate
 
-Asynchronous, auditable delegation from Claude Code to external CLI agents.
+[![ci](https://github.com/seigo2016/claude-code-delegate/actions/workflows/ci.yml/badge.svg)](https://github.com/seigo2016/claude-code-delegate/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[日本語版](README.ja.md)
+[English](README.md) | [日本語](README.ja.md)
 
-Claude Code stays the place where things are decided. The work itself goes to
-Codex, OpenCode, or a headless Claude: reading artifacts, mapping a repository,
-applying an approved change, running checks. What comes back is a small piece of
-evidence, not a transcript.
+**Stop spending your context on work you could have sent away.**
 
-Nothing is polled. The session hands over a task, ends its turn, and is woken
-when there is something to collect.
+claude-code-delegate hands bounded work from Claude Code to Codex, OpenCode, or a
+headless Claude. What comes back is unverified until it is checked: the worker
+finished rather than stalled or vanished, the result meets a fixed contract, and
+nothing was written outside the scope the task declared.
+
+The Claude session does not poll for progress. It hands the task over, ends its
+turn, and is woken only when there is something to collect.
 
 ## Why
 
-A long Claude Code session runs out of context, and it runs out on the wrong
-things: log output, file dumps, directory listings, the same check repeated. The
-judgement that needed the context gets squeezed by the work that did not.
+In a long session, context goes to log output, file dumps, directory listings and
+repeated checks, rather than to the judgement that needed it.
 
-Delegating that work is easy. Delegating it *safely* is the part this handles: a
-worker that hangs, dies, returns nothing, or returns something that only looks
-like an answer must not come back as success.
+A worker can hang, die, return nothing, or return something that only looks like
+a result. None of those comes back as success.
 
-## Install
-
-Requires Python 3.11+ and at least one of `codex`, `opencode`, or `claude` on
-your PATH. Linux and macOS.
+## Try it
 
 ```bash
-git clone https://github.com/seigo2016/claude-code-delegate
-claude plugin marketplace add ./claude-code-delegate
+claude plugin marketplace add seigo2016/claude-code-delegate
 claude plugin install delegate@claude-code-delegate --scope project
+
+cp examples/delegate.toml .claude/delegate.toml
+# set enabled = true on one worker, and fill in its models
 ```
 
-Installing changes nothing about your session: no agent is replaced, no tool is
-removed, and no backend is enabled until you say so.
+Then, in a Claude Code session:
 
-## Configure
+> /delegate check that CHANGELOG.md lists every tag reachable from main
 
-Copy `examples/delegate.toml` to `.claude/delegate.toml` in your repository, fill
-in models you actually have, and enable one worker.
+Claude describes the task, hands it to a worker, and ends its turn. A hook wakes
+the session when the worker finishes, and Claude collects the result.
+
+## Requirements
+
+- Python 3.11+ on PATH, for `tomllib`. macOS ships 3.9 as `python3`, so install a
+  newer one (`brew install python@3.12`). No other dependencies.
+- At least one of `codex`, `opencode`, or `claude`.
+- Linux or macOS. Windows works through WSL.
+
+Installing the plugin replaces no agent, removes no tool, and enables no backend
+until you declare one.
+
+## Configuration
 
 ```toml
 default_worker = "claude"
@@ -55,29 +66,22 @@ effort = "high"
 task_class = "review"
 ```
 
-A role asks for a *capability*, never a model, so the same roles work whichever
-backend you configured. If the chosen worker has no model for the capability a
+A role asks for a capability, never a model, so the same roles work whichever
+backend is configured. If the chosen worker has no model for the capability a
 role needs, the task is refused before anything starts.
 
-| adapter | how it is driven | how it answers |
+| adapter | driven by | answers with |
 |---|---|---|
-| `codex` | `codex exec --json` | output file, plus a JSON schema it is held to |
+| `codex` | `codex exec --json` | an output file, plus a JSON schema it is held to |
 | `opencode` | `opencode run --format json` | its last text part |
 | `claude` | `claude -p --output-format stream-json` | its closing result event |
 
-## Use
+Roles that ship in the example: `artifact-auditor`, `repo-cartographer`,
+`bounded-implementer`, `verification-runner`, `consistency-auditor`,
+`adversarial-critic`.
 
-From a Claude Code session the `/delegate` skill covers the whole loop. Directly:
-
-```bash
-delegate submit --role artifact-auditor --title changelog-vs-tags --packet packet.json
-# → {"task_id": "…", "status": "starting", "worker": "claude", "model": "sonnet"}
-
-delegate collect <task-id>
-```
-
-A packet says only what this task adds. Role instructions, the model, the
-prohibitions and the result contract are supplied for you.
+Claude writes the task itself. It says what to do, what may be read, what may be
+written, and what evidence to bring back:
 
 ```json
 {
@@ -89,47 +93,89 @@ prohibitions and the result contract are supplied for you.
 }
 ```
 
-Some work must not leave the session: anything needing live session state, and
-any judgement a person will be held to. Mark it `"host_only": true` and it is
-refused rather than sent.
-
-## What it will not do
-
-A result you receive is a result you can act on.
+## What you get back
 
 | what happened | what you get |
 |---|---|
 | a tool call never returned | `timeout`, `failure_class: tool_stall` |
-| the worker finished but never handed back a result | `timeout`, `failure_class: finalization_timeout`, its last message kept aside |
+| the worker finished but never handed back a result | `timeout`, `finalization_timeout`, its last message kept aside |
 | the worker exited non-zero | `failed`, `nonzero_exit` |
 | the worker produced nothing | `failed`, `empty_result` |
-| the answer did not meet the contract | `failed`, `invalid_result`, with the reasons |
+| the result did not meet the contract | `failed`, `invalid_result`, with the reasons |
 | the worker wrote outside its declared scope | `failed`, `write_scope_violation`, with the paths |
-| the machine rebooted under it | `orphaned`, or `degraded` if a result survived |
+| the backend could not be started | `failed`, `launch_error` |
+| you cancelled it | `cancelled` |
+| the machine went down under it | `orphaned`, or `degraded` if a result survived |
 
-A message that merely looks like a valid answer is never promoted to one. It is
-kept beside the task so you can read it and decide.
+A timeout carries the reading of where it stopped: `tool_stall`,
+`finalization_timeout`, `runtime_stall`, `event_stream_stall`, or
+`wall_clock_timeout`.
 
-A result holds at most five strings of 300 characters per list. That cap is the
-product: an answer that cannot be read at a glance has moved the cost back into
-the session that delegated it. When the answer really is a long list, have the
-worker write a file and return its path.
+A message that looks like a valid result is never promoted to one. It is kept
+beside the task.
 
-## Limits
+A result holds at most five strings of 300 characters per list. For a longer one,
+have the worker write a file and return its path.
 
-Stated plainly, because a boundary you believe in but do not have is worse than
-none.
+`required_evidence` is instruction to the worker, and appears in its prompt. The
+contract checks that the evidence fields are present, well formed and within those
+limits. It does not check that they answer what was asked, and it cannot tell
+whether they are true.
 
-- **Write scope is checked with git, so it sees the work tree and nothing else.**
-  A worker that writes to a home directory, a system path, or over the network is
-  outside what this can observe. A repository without git is not checked at all,
-  and the task says so.
-- **There is no sandbox.** Workers run with whatever their own CLI grants them.
-- **Adapters follow three CLIs that change.** The event shapes were recorded from
-  real runs; a backend release can move them.
-- **`fcntl` means Linux and macOS.** Windows works through WSL.
+Claude marks a task `"host_only": true` when it needs live session state, or when
+the judgement is one a person must make rather than approve after the fact. Submit
+then fails closed instead of sending it. This is an explicit marker written into
+the packet, not an automatic classifier.
+
+## Commands
+
+The skill and the hooks run these. You need them yourself only to diagnose
+something.
+
+| command | for |
+|---|---|
+| `delegate submit --role R --title T --packet P` | start a worker and get a handle |
+| `delegate collect <task-id>` | take delivery, once |
+| `delegate status <task-id>` | explicit diagnosis, never a waiting loop |
+| `delegate cancel <task-id>` | stop a task that is wrong or runaway |
+| `delegate reconcile` | classify tasks whose worker is gone |
+| `delegate watch` | what the hook runs; waits for something to collect |
+
+## What is and is not checked
+
+Detected:
+
+- a worker that never started, stalled, died, or lost its supervisor
+- a result that is absent, malformed, or missing required fields
+- a final message that never became a delivered result
+- writes outside the declared scope, within the git work tree
+
+Not detected:
+
+- writes outside the work tree: a home directory, a system path
+- writes to files `.gitignore` excludes
+- network effects, credential access, or anything git does not represent
+- a result that satisfies the contract and is still wrong
+
+There is no sandbox: workers run with whatever their own CLI grants them. The
+adapters follow three CLIs whose event shapes were recorded from real runs, and a
+backend release can move them.
+
+## Non-goals
+
+This is narrower than a general multi-agent orchestrator on purpose: one bounded
+handoff, verified. Not in scope:
+
+parallel worker fleets, agent-to-agent chat, consensus or debate, a dashboard,
+persistent agent memory, a workflow engine, real-time steering, transcript
+aggregation.
 
 ## Development
+
+The adapters were written against recorded runs of the three CLIs rather than
+their documentation. Two of the checks above exist because a real worker got past
+the earlier ones: one returned its result inside a code fence, another honoured
+the five-item limit by packing eighteen findings into a single string.
 
 ```bash
 uv sync --extra dev
@@ -138,9 +184,10 @@ uv run ruff check .
 uv run ty check
 ```
 
-The tests drive a stand-in worker that can be made to hang, die, return nothing,
-or return something that only looks like an answer. The handling above is
-therefore tested rather than asserted.
+Tests drive a stand-in worker that can be made to fail on demand. They cover
+stalled and dead workers, a backend that cannot be launched, empty and malformed
+results, a finished turn that never handed one back, writes outside the declared
+scope, orphan and degraded reconciliation, and collecting a result exactly once.
 
 ## License
 

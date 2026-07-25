@@ -9,7 +9,7 @@ Hand `$ARGUMENTS` to an external worker, keep the handle, and end your turn. Do 
 
 ## When not to delegate
 
-Keep the work here when it needs live session state, when the decision itself is the deliverable, or when the task cannot be described without reproducing the context you are trying to protect. Mark those packets `"host_only": true` and they will be refused rather than sent.
+Keep the work here when it needs live session state, or when the decision itself is the deliverable. Keep it here too when describing the task would reproduce the context you are protecting. Mark those packets `"host_only": true` and they are refused rather than sent.
 
 The final call on scope, on what counts as done, and on anything a person will be held to stays with you.
 
@@ -46,7 +46,7 @@ delegate submit --role artifact-auditor --title changelog-vs-tags --packet /tmp/
 
 Role instructions, the model, the prohibitions and the result contract are added for you. Do not repeat them in the packet.
 
-**A result holds at most five short strings per list.** That cap is the point: a worker that hands back forty lines has moved the reading back into this session. When the answer is genuinely a long list — an inventory, a full mapping, every occurrence of something — ask for it as a file and let the worker return the path:
+**A result holds at most five short strings per list.** That cap is the point: a worker that hands back forty lines has moved the reading back into this session. When the result is genuinely a long list, such as an inventory or every occurrence of something, ask for it as a file and let the worker return the path:
 
 ```json
 {

@@ -23,7 +23,7 @@ The known failure mode is not that you delegate too much. It is that you do the 
 - The decision itself, and the standard for what counts as done.
 - Anything a person will be held to: a claim, a commitment, an irreversible action.
 
-Mark those `"host_only": true`. They will be refused rather than sent, which is the behaviour you want.
+Mark those `"host_only": true`. They are refused rather than sent.
 
 ## When results come back
 
