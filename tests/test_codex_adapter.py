@@ -79,7 +79,6 @@ def test_the_command_pins_the_root_model_effort_and_result_contract(tmp_path: Pa
         schema_path=tmp_path / "result.schema.json",
         model="gpt-5.6-terra",
         effort="high",
-        resume_session_id=None,
     )
 
     assert command[:2] == ["codex", "exec"]
@@ -88,18 +87,4 @@ def test_the_command_pins_the_root_model_effort_and_result_contract(tmp_path: Pa
     assert 'model_reasoning_effort="high"' in command
     assert str(tmp_path / "result.schema.json") in command
     assert command[-1] == "-", "the prompt is fed on stdin"
-    assert ["--disable", "fast_mode"] == command[-3:-1]
-
-
-def test_resuming_reuses_the_recorded_session(tmp_path: Path) -> None:
-    command = ADAPTER.build_command(
-        project_root=tmp_path,
-        result_path=tmp_path / "result.json",
-        schema_path=tmp_path / "result.schema.json",
-        model="gpt-5.6-terra",
-        effort="high",
-        resume_session_id="th-1",
-    )
-
-    assert command[:3] == ["codex", "exec", "resume"]
-    assert "th-1" in command
+    assert command[-3:-1] == ["--disable", "fast_mode"]

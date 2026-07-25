@@ -41,7 +41,6 @@ class WorkerAdapter(Protocol):
         schema_path: Path,
         model: str,
         effort: str,
-        resume_session_id: str | None,
     ) -> list[str]: ...
 
     def parse_event(self, raw_line: str) -> NormalizedEvent | None: ...

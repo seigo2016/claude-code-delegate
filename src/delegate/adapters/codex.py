@@ -27,13 +27,8 @@ class CodexAdapter:
         schema_path: Path,
         model: str,
         effort: str,
-        resume_session_id: str | None,
     ) -> list[str]:
-        command = ["codex", "exec"]
-        if resume_session_id:
-            command.append("resume")
-        else:
-            command.extend(["-C", str(project_root)])
+        command = ["codex", "exec", "-C", str(project_root)]
         command.extend(
             [
                 "--json",
@@ -48,8 +43,6 @@ class CodexAdapter:
             ]
         )
         command.extend(["--disable", "fast_mode"])
-        if resume_session_id:
-            command.append(resume_session_id)
         command.append("-")
         return command
 
