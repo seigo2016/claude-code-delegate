@@ -107,6 +107,17 @@ sys.exit(0)
 """
 
 
+PACKET = json.dumps(
+    {
+        "objective": "Count the tests.",
+        "read": ["tests"],
+        "allowed_writes": [],
+        "required_evidence": ["test count"],
+        "host_only": False,
+    }
+)
+
+
 @dataclass
 class Workspace:
     repo: Path
@@ -124,6 +135,27 @@ class Workspace:
         return [
             json.loads(line) for line in self.calls_file.read_text(encoding="utf-8").splitlines()
         ]
+
+    def submit(
+        self,
+        *extra: str,
+        packet: str = PACKET,
+        role: str = "artifact-auditor",
+        title: str = "count-tests",
+        expect_success: bool = False,
+    ) -> dict:
+        (self.repo / "packet.json").write_text(packet, encoding="utf-8")
+        return self.run(
+            "submit",
+            "--role",
+            role,
+            "--title",
+            title,
+            "--packet",
+            "packet.json",
+            *extra,
+            expect_success=expect_success,
+        )
 
     def run(self, *args: str, expect_success: bool = True) -> dict:
         completed = subprocess.run(

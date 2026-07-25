@@ -10,32 +10,7 @@ import json
 import time
 from pathlib import Path
 
-from conftest import Workspace
-
-PACKET = json.dumps(
-    {
-        "objective": "Count the tests.",
-        "read": ["tests"],
-        "allowed_writes": [],
-        "required_evidence": ["test count"],
-        "host_only": False,
-    }
-)
-
-
-def submit(workspace: Workspace, *extra: str, packet: str = PACKET, role: str = "artifact-auditor"):
-    (workspace.repo / "packet.json").write_text(packet, encoding="utf-8")
-    return workspace.run(
-        "submit",
-        "--role",
-        role,
-        "--title",
-        "count-tests",
-        "--packet",
-        "packet.json",
-        *extra,
-        expect_success=False,
-    )
+from conftest import PACKET, Workspace
 
 
 def wait_for_terminal(workspace: Workspace, task_id: str, timeout: float = 20) -> dict:
@@ -51,7 +26,7 @@ def wait_for_terminal(workspace: Workspace, task_id: str, timeout: float = 20) -
 def test_submitting_returns_a_handle_without_waiting(workspace: Workspace) -> None:
     workspace.mode("silent_hang")
 
-    handle = submit(workspace)
+    handle = workspace.submit()
 
     assert handle["task_id"]
     assert handle["status"] in {"queued", "starting", "running"}
@@ -63,7 +38,7 @@ def test_submitting_returns_a_handle_without_waiting(workspace: Workspace) -> No
 def test_the_result_contract_is_written_beside_the_task_not_looked_up_on_disk(
     workspace: Workspace,
 ) -> None:
-    handle = submit(workspace)
+    handle = workspace.submit()
     state = wait_for_terminal(workspace, handle["task_id"])
 
     shipped = Path(state["task_dir"]) / "result.schema.json"
@@ -72,7 +47,7 @@ def test_the_result_contract_is_written_beside_the_task_not_looked_up_on_disk(
 
 
 def test_a_finished_task_is_delivered_once(workspace: Workspace) -> None:
-    handle = submit(workspace)
+    handle = workspace.submit()
     state = wait_for_terminal(workspace, handle["task_id"])
     assert state["status"] == "completed"
 
@@ -87,7 +62,7 @@ def test_a_finished_task_is_delivered_once(workspace: Workspace) -> None:
 
 def test_a_task_still_running_cannot_be_collected(workspace: Workspace) -> None:
     workspace.mode("silent_hang")
-    handle = submit(workspace)
+    handle = workspace.submit()
 
     refusal = workspace.run("collect", handle["task_id"], expect_success=False)
 
@@ -99,7 +74,7 @@ def test_a_result_that_asks_for_a_decision_is_not_reported_as_completed(
     workspace: Workspace,
 ) -> None:
     workspace.mode("decision_needed")
-    handle = submit(workspace)
+    handle = workspace.submit()
 
     state = wait_for_terminal(workspace, handle["task_id"])
 
@@ -108,7 +83,7 @@ def test_a_result_that_asks_for_a_decision_is_not_reported_as_completed(
 
 def test_a_worker_that_exits_nonzero_is_a_failure(workspace: Workspace) -> None:
     workspace.mode("nonzero_exit")
-    handle = submit(workspace)
+    handle = workspace.submit()
 
     state = wait_for_terminal(workspace, handle["task_id"])
 
@@ -122,7 +97,7 @@ def test_a_backend_that_cannot_write_a_result_file_still_delivers_one(
     # Only Codex can be handed an output path. OpenCode and claude return their
     # answer as the final message, so the result has to be taken from there.
     workspace.mode("result_in_message_only")
-    handle = submit(workspace)
+    handle = workspace.submit()
 
     state = wait_for_terminal(workspace, handle["task_id"])
 
@@ -134,7 +109,7 @@ def test_a_backend_that_cannot_write_a_result_file_still_delivers_one(
 
 def test_a_worker_that_writes_no_result_is_a_failure(workspace: Workspace) -> None:
     workspace.mode("empty_result")
-    handle = submit(workspace)
+    handle = workspace.submit()
 
     state = wait_for_terminal(workspace, handle["task_id"])
 
@@ -146,7 +121,7 @@ def test_a_result_that_breaks_the_contract_is_a_failure_and_the_text_is_kept(
     workspace: Workspace,
 ) -> None:
     workspace.mode("invalid_result")
-    handle = submit(workspace)
+    handle = workspace.submit()
 
     state = wait_for_terminal(workspace, handle["task_id"])
 
@@ -158,7 +133,7 @@ def test_a_result_that_breaks_the_contract_is_a_failure_and_the_text_is_kept(
 
 def test_a_task_that_runs_out_of_time_records_where_it_stopped(workspace: Workspace) -> None:
     workspace.mode("tool_hang")
-    handle = submit(workspace, "--timeout", "1")
+    handle = workspace.submit("--timeout", "1")
 
     state = wait_for_terminal(workspace, handle["task_id"])
 
@@ -170,7 +145,7 @@ def test_a_worker_that_finished_but_never_handed_back_a_result_is_named_as_such(
     workspace: Workspace,
 ) -> None:
     workspace.mode("finalization_hang")
-    handle = submit(workspace, "--timeout", "1")
+    handle = workspace.submit("--timeout", "1")
 
     state = wait_for_terminal(workspace, handle["task_id"])
 
@@ -181,7 +156,7 @@ def test_a_worker_that_finished_but_never_handed_back_a_result_is_named_as_such(
 
 def test_the_recovered_message_is_not_promoted_to_a_result(workspace: Workspace) -> None:
     workspace.mode("finalization_hang")
-    handle = submit(workspace, "--timeout", "1")
+    handle = workspace.submit("--timeout", "1")
     wait_for_terminal(workspace, handle["task_id"])
 
     envelope = workspace.run("collect", handle["task_id"])
@@ -192,14 +167,14 @@ def test_the_recovered_message_is_not_promoted_to_a_result(workspace: Workspace)
 
 def test_the_same_request_twice_reuses_the_first_task(workspace: Workspace) -> None:
     workspace.mode("silent_hang")
-    first = submit(workspace)
+    first = workspace.submit()
 
-    second = submit(workspace)
+    second = workspace.submit()
 
     assert second["task_id"] == first["task_id"]
     assert second["deduplicated"] is True
 
-    third = submit(workspace, "--fresh")
+    third = workspace.submit("--fresh")
     assert third["task_id"] != first["task_id"]
 
     workspace.run("cancel", first["task_id"])
@@ -209,14 +184,14 @@ def test_the_same_request_twice_reuses_the_first_task(workspace: Workspace) -> N
 def test_host_only_work_never_starts_a_worker(workspace: Workspace) -> None:
     packet = json.dumps({**json.loads(PACKET), "host_only": True})
 
-    refusal = submit(workspace, packet=packet)
+    refusal = workspace.submit(packet=packet)
 
     assert refusal["run_in"] == "claude-code"
     assert workspace.calls() == [], "no worker was started"
 
 
 def test_a_role_that_must_declare_its_writes_is_refused_without_them(workspace: Workspace) -> None:
-    refusal = submit(workspace, role="bounded-implementer")
+    refusal = workspace.submit(role="bounded-implementer")
 
     assert "allowed_writes" in refusal["error"]
     assert workspace.calls() == []
@@ -224,7 +199,7 @@ def test_a_role_that_must_declare_its_writes_is_refused_without_them(workspace: 
 
 def test_a_cancelled_task_is_terminal_and_not_a_success(workspace: Workspace) -> None:
     workspace.mode("silent_hang")
-    handle = submit(workspace)
+    handle = workspace.submit()
 
     workspace.run("cancel", handle["task_id"])
 
@@ -236,7 +211,7 @@ def test_a_worker_that_vanished_is_reclassified_rather_than_left_running(
     workspace: Workspace,
 ) -> None:
     workspace.mode("silent_hang")
-    handle = submit(workspace)
+    handle = workspace.submit()
     state = workspace.run("status", handle["task_id"])
     task_dir = Path(state["task_dir"])
 

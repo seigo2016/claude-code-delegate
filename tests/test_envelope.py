@@ -1,9 +1,7 @@
-"""The result contract has exactly one definition.
+"""The result contract.
 
-Codex can be handed a JSON Schema so the worker self-validates, but OpenCode and
-claude offer no equivalent, so our own check is the only guarantee that holds for
-every backend. The schema shipped to workers is generated from that same check,
-so the two cannot drift apart.
+Only Codex can be handed a schema up front, so this check is the one guarantee
+that holds for every backend.
 """
 
 from __future__ import annotations
