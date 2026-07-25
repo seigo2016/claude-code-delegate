@@ -1,9 +1,7 @@
 """The task description handed to a worker.
 
-A packet carries only what this task adds: one objective, what to read, what it
-may write, and what evidence to bring back. Role instructions, model choice and
-the common prohibitions come from configuration, so they are never repeated here
-and never negotiable by the caller.
+A packet carries only what this task adds. Role instructions, model choice and
+the prohibitions come from configuration, so the caller cannot negotiate them.
 """
 
 from __future__ import annotations
@@ -33,10 +31,3 @@ def validate(value: Any) -> dict[str, Any]:
     if not isinstance(value["host_only"], bool):
         raise ValueError("host_only must be a boolean")
     return value
-
-
-def refusal(value: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
-    """Why this packet must not start an external worker, if it must not."""
-    if value["host_only"]:
-        return ("host_only work must stay in Claude Code", {"run_in": "claude-code"})
-    return None

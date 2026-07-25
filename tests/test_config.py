@@ -152,3 +152,12 @@ def test_several_enabled_workers_with_no_default_must_be_disambiguated(tmp_path:
 
     with pytest.raises(config.ConfigError, match="set default_worker or pass --worker"):
         settings.plan("artifact-auditor")
+
+
+def test_a_role_missing_a_required_key_is_reported_not_raised_as_a_key_error(
+    tmp_path: Path,
+) -> None:
+    settings = write(tmp_path, '[roles.artifact-auditor]\neffort = "high"\n')
+
+    with pytest.raises(config.ConfigError, match="roles.artifact-auditor is missing capability"):
+        config.load(settings)

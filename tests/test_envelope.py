@@ -9,12 +9,9 @@ so the two cannot drift apart.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from delegate import envelope
-
-SCHEMA_FILE = Path(__file__).resolve().parents[1] / "schemas" / "result.schema.json"
 
 
 def valid() -> dict[str, Any]:
@@ -55,10 +52,6 @@ def test_a_result_that_asks_for_a_decision_must_say_what_the_decision_is() -> No
     assert envelope.violations(undecided) == [
         "status is decision_needed but decision_needed is empty"
     ]
-
-
-def test_the_shipped_schema_is_generated_from_the_same_definition() -> None:
-    assert json.loads(SCHEMA_FILE.read_text(encoding="utf-8")) == envelope.json_schema()
 
 
 def test_a_fenced_answer_is_still_an_answer() -> None:

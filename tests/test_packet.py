@@ -33,15 +33,3 @@ def test_an_empty_objective_is_rejected() -> None:
 def test_path_lists_must_hold_strings() -> None:
     with pytest.raises(ValueError, match="read must be an array of strings"):
         packet.validate({**valid(), "read": ["ok", 3]})
-
-
-def test_a_host_only_packet_is_never_handed_to_an_external_worker() -> None:
-    refusal = packet.refusal(valid())
-    assert refusal is None
-
-    refusal = packet.refusal({**valid(), "host_only": True})
-
-    assert refusal is not None
-    message, detail = refusal
-    assert "host_only" in message
-    assert detail == {"run_in": "claude-code"}

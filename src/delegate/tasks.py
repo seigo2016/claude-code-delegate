@@ -1,8 +1,7 @@
 """Creating a task and handing it to a detached worker.
 
-Submitting writes everything the worker needs to disk first, then starts a
-process that outlives the caller. The caller gets a handle back immediately and
-is expected to stop thinking about the task until it is told the task finished.
+Everything the worker needs is on disk before the process starts, so the caller
+can get its handle and stop thinking about the task.
 """
 
 from __future__ import annotations
@@ -119,8 +118,6 @@ def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str,
         "worker": state["worker"],
         "model": state["model"],
         "effort": state["effort"],
-        "state_path": state["state_path"],
-        "result_path": state["result_path"],
         "deduplicated": deduplicated,
     }
 
@@ -138,10 +135,8 @@ def submit(
     fresh: bool = False,
 ) -> dict[str, Any]:
     packet_module.validate(value)
-    refusal = packet_module.refusal(value)
-    if refusal is not None:
-        message, detail = refusal
-        raise SubmitRefused(message, **detail)
+    if value["host_only"]:
+        raise SubmitRefused("host_only work must stay in Claude Code", run_in="claude-code")
 
     plan = settings.plan(role, worker=worker, effort=effort)
     if plan.role.requires_allowed_writes and not value["allowed_writes"]:

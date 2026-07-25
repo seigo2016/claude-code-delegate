@@ -1,8 +1,7 @@
 """Claude Code in headless mode, mapped onto the normalized event kinds.
 
-Intermediate assistant text is deliberately not treated as the answer: only the
-closing result event is, so a worker that thinks out loud and then stalls is a
-stall rather than a delivery.
+Only the closing result event counts as the answer, so a worker that thinks out
+loud and then stalls is a stall rather than a delivery.
 """
 
 from __future__ import annotations

@@ -12,6 +12,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from delegate import liveness
 
 HOLDER = """
@@ -56,3 +58,26 @@ def test_worker_is_alive_only_while_it_holds_the_lock(tmp_path: Path) -> None:
         holder.wait(timeout=10)
 
     assert liveness.worker_alive(lock) is False
+
+
+def test_a_second_holder_is_told_so_rather_than_failing_obscurely(tmp_path: Path) -> None:
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    lock = tmp_path / "worker.lock"
+    ready, stop = tmp_path / "ready", tmp_path / "stop"
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            HOLDER.format(src=src, lock=str(lock), ready=str(ready), stop=str(stop)),
+        ]
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        with pytest.raises(liveness.AlreadyHeld), liveness.hold(lock):
+            pass
+    finally:
+        stop.write_text("")
+        holder.wait(timeout=10)

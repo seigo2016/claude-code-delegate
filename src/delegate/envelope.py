@@ -1,8 +1,7 @@
 """The bounded result a worker must return.
 
-A worker reports evidence, not transcript. The caps keep a result small enough to
-read in the Claude Code session that asked for it, which is the whole point of
-delegating the work in the first place.
+A worker reports evidence, not transcript: a result that cannot be read at a
+glance has moved the cost back into the session that delegated it.
 """
 
 from __future__ import annotations

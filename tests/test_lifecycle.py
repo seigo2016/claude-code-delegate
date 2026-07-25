@@ -41,7 +41,7 @@ def submit(workspace: Workspace, *extra: str, packet: str = PACKET, role: str = 
 def wait_for_terminal(workspace: Workspace, task_id: str, timeout: float = 20) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        state = workspace.run("status", task_id, "--reason", "user-requested")
+        state = workspace.run("status", task_id)
         if state["status"] not in {"queued", "starting", "running", "cancellation_requested"}:
             return state
         time.sleep(0.05)
@@ -237,7 +237,7 @@ def test_a_worker_that_vanished_is_reclassified_rather_than_left_running(
 ) -> None:
     workspace.mode("silent_hang")
     handle = submit(workspace)
-    state = workspace.run("status", handle["task_id"], "--reason", "user-requested")
+    state = workspace.run("status", handle["task_id"])
     task_dir = Path(state["task_dir"])
 
     # Kill the worker the way a reboot would: no chance to record anything.
@@ -245,7 +245,7 @@ def test_a_worker_that_vanished_is_reclassified_rather_than_left_running(
 
     while not (task_dir / "worker.lock").exists():
         time.sleep(0.02)
-    os_pid = workspace.run("status", handle["task_id"], "--reason", "recovery")["pid"]
+    os_pid = workspace.run("status", handle["task_id"])["pid"]
     import os
 
     os.killpg(os.getpgid(os_pid), signal.SIGKILL)

@@ -94,7 +94,7 @@ def test_reconcile_reports_a_short_line_per_task_not_the_whole_state(
     workspace: Workspace,
 ) -> None:
     handle = submit(workspace)
-    deadline_state = workspace.run("status", handle["task_id"], "--reason", "watchdog")
+    deadline_state = workspace.run("status", handle["task_id"])
     assert Path(deadline_state["task_dir"]).exists()
 
     reported = workspace.run("reconcile")["tasks"][0]

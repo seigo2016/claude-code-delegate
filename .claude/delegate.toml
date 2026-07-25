@@ -1,4 +1,5 @@
 # This repository's own delegation settings. It develops itself with itself.
+# Only the roles used here; the full set to copy from is examples/delegate.toml.
 
 default_worker = "claude"
 
@@ -17,7 +18,7 @@ models = { light = "opencode-go/deepseek-v4-flash", standard = "opencode-go/kimi
 
 [workers.codex]
 adapter = "codex"
-enabled = false
+enabled = true
 models = { light = "gpt-5.6-luna", standard = "gpt-5.6-terra", frontier = "gpt-5.6-sol" }
 
 [roles.artifact-auditor]
@@ -40,11 +41,6 @@ requires_allowed_writes = true
 capability = "standard"
 effort = "high"
 task_class = "execution"
-
-[roles.consistency-auditor]
-capability = "light"
-effort = "high"
-task_class = "review"
 
 [roles.adversarial-critic]
 capability = "frontier"

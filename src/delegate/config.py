@@ -1,9 +1,7 @@
 """What a role needs, and which backends can supply it.
 
-Roles are written against capabilities, not model names, so the same set of roles
-works whichever backend a repository has configured. Resolution happens before a
-worker is started, so a missing model is an error you read, not a failure that
-surfaces minutes later inside someone else's CLI.
+Roles ask for a capability, never a model, so they survive a change of backend.
+Resolution happens before launch, so a gap is a message rather than a late crash.
 """
 
 from __future__ import annotations
@@ -103,16 +101,25 @@ class Settings:
         return enabled[0]
 
 
+def _required(body: dict[str, Any], key: str, where: str) -> Any:
+    if key not in body:
+        raise ConfigError(f"{where} is missing {key}")
+    return body[key]
+
+
 def load(path: Path) -> Settings:
     with path.open("rb") as handle:
-        raw: dict[str, Any] = tomllib.load(handle)
+        try:
+            raw: dict[str, Any] = tomllib.load(handle)
+        except tomllib.TOMLDecodeError as error:
+            raise ConfigError(f"{path} is not valid TOML: {error}") from error
 
     roles = {
         name: Role(
             name=name,
-            capability=str(body["capability"]),
-            effort=str(body["effort"]),
-            task_class=str(body["task_class"]),
+            capability=str(_required(body, "capability", f"roles.{name}")),
+            effort=str(_required(body, "effort", f"roles.{name}")),
+            task_class=str(_required(body, "task_class", f"roles.{name}")),
             timeout=int(body.get("timeout", DEFAULT_TIMEOUT)),
             requires_allowed_writes=bool(body.get("requires_allowed_writes", False)),
         )
@@ -121,7 +128,7 @@ def load(path: Path) -> Settings:
     workers = {
         name: Worker(
             name=name,
-            adapter=str(body["adapter"]),
+            adapter=str(_required(body, "adapter", f"workers.{name}")),
             enabled=bool(body.get("enabled", False)),
             models={str(k): str(v) for k, v in body.get("models", {}).items()},
         )

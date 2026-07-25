@@ -14,6 +14,8 @@ from typing import Any
 
 from delegate import config, events, liveness, runner, store, tasks
 
+WATCH_POLL_SEC = 1.0
+
 
 def _print(value: dict[str, Any]) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True))
@@ -200,7 +202,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
         if not waiting or time.monotonic() >= deadline:
             _print({"ready": []})
             return 1
-        time.sleep(0.2)
+        time.sleep(WATCH_POLL_SEC)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -223,9 +225,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = with_root(sub.add_parser("status", help="read one task's state"))
     status.add_argument("task_id")
-    status.add_argument(
-        "--reason", required=True, choices=("user-requested", "watchdog", "recovery")
-    )
     status.set_defaults(func=cmd_status)
 
     collect = with_root(sub.add_parser("collect", help="take delivery of a finished task"))

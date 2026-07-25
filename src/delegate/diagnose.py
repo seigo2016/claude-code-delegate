@@ -37,7 +37,6 @@ class RunView:
 
 
 def observe(view: RunView, event: NormalizedEvent) -> RunView:
-    """Fold one event into the running view."""
     view = replace(view, event_count=view.event_count + 1)
 
     if event.kind == "session_started":

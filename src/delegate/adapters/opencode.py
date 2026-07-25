@@ -1,9 +1,7 @@
 """OpenCode CLI, mapped onto the normalized event kinds.
 
-OpenCode has no output-file flag and emits a step boundary several times per run,
-so the answer is taken from its last text part and no event means "the turn is
-over". A run that hangs after producing a usable answer is still caught, because
-the answer itself is what makes it a finalization timeout.
+It has no output-file flag, and its step boundary repeats within a run, so the
+answer comes from the last text part and nothing here means "turn over".
 """
 
 from __future__ import annotations

@@ -32,3 +32,24 @@ def test_a_terminal_state_can_never_be_overwritten_by_a_later_update(tmp_path: P
     state = store.read_json(task_dir / "state.json")
     assert state["status"] == "completed"
     assert "pid" not in state
+
+
+def test_progress_updates_change_the_state_without_filling_the_logs(tmp_path: Path) -> None:
+    task_dir = make_task(tmp_path, status="running")
+    events.emit(task_dir, "running")
+    before = (task_dir.parent / "events.jsonl").read_text(encoding="utf-8")
+
+    events.update(task_dir, event_count=7)
+    events.update(task_dir, event_count=9)
+
+    assert store.read_json(task_dir / "state.json")["event_count"] == 9
+    assert (task_dir.parent / "events.jsonl").read_text(encoding="utf-8") == before
+
+
+def test_a_progress_update_cannot_revive_a_finished_task(tmp_path: Path) -> None:
+    task_dir = make_task(tmp_path)
+    events.emit(task_dir, "completed")
+
+    events.update(task_dir, event_count=3)
+
+    assert "event_count" not in store.read_json(task_dir / "state.json")

@@ -1,9 +1,6 @@
 """The detached process that supervises one worker run.
 
-It holds the task's lock for its whole life, so anyone can tell whether it is
-still there. It reads the worker's output forward only, never re-reading what it
-has already seen, and it decides how the run ended from what it observed rather
-than from the exit code alone.
+How a run ended is decided from what was observed, not from the exit code alone.
 """
 
 from __future__ import annotations
@@ -19,28 +16,27 @@ from typing import Any
 
 from delegate import diagnose, envelope, events, liveness, store
 from delegate.adapters import registry
+from delegate.adapters.base import WorkerAdapter
 
 
 class _Tail:
-    """Reads a growing file forward only."""
+    """Reads a growing file forward only, in bytes so the offset means one thing."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.offset = 0
+        self.partial = b""
 
     def lines(self) -> list[str]:
         try:
-            with self.path.open(encoding="utf-8", errors="replace") as handle:
+            with self.path.open("rb") as handle:
                 handle.seek(self.offset)
-                text = handle.read()
+                chunk = handle.read()
                 self.offset = handle.tell()
         except OSError:
             return []
-        if not text.endswith("\n") and text:
-            # Keep the partial last line for the next read.
-            text, _, remainder = text.rpartition("\n")
-            self.offset -= len(remainder.encode("utf-8"))
-        return [line for line in text.splitlines() if line]
+        *complete, self.partial = (self.partial + chunk).split(b"\n")
+        return [line.decode("utf-8", "replace") for line in complete if line]
 
 
 def _snapshot(view: diagnose.RunView) -> dict[str, Any]:
@@ -87,14 +83,26 @@ def run(task_dir: Path) -> int:
     state = store.read_json(task_dir / "state.json")
     adapter = registry.get(str(state["adapter"]))
 
+    try:
+        _supervise(task_dir, state, adapter)
+    except liveness.AlreadyHeld:
+        # This process writes nothing to a terminal, so the refusal has to land
+        # in the task's own log or it is lost.
+        store.append_jsonl(
+            task_dir / "events.jsonl",
+            {"ts": events.now_iso(), "task_id": state["task_id"], "refused": "already_supervised"},
+        )
+        return 2
+    return 0
+
+
+def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) -> None:
     with liveness.hold(Path(state["lock_path"])):
         if state["status"] == "cancellation_requested":
             events.emit(task_dir, "cancelled", terminal_reason="cancelled_before_start")
-            return 0
+            return
 
-        # The contract travels with the task rather than being looked up on disk,
-        # so it is correct however this package was installed, and it stays
-        # readable next to the run it governed.
+        # Written per task, so it is right however this package was installed.
         schema_path = task_dir / "result.schema.json"
         store.write_json(schema_path, envelope.json_schema())
 
@@ -151,7 +159,7 @@ def run(task_dir: Path) -> int:
                     break
                 if now >= next_beat:
                     view = _absorb(view, adapter, event_tail, stderr_tail)
-                    events.emit(task_dir, str(state["status"]), **_snapshot(view))
+                    events.update(task_dir, **_snapshot(view))
                     next_beat = now + heartbeat
                 time.sleep(min(0.05, heartbeat))
             exit_code = process.wait()
@@ -163,11 +171,10 @@ def run(task_dir: Path) -> int:
             **_snapshot(view),
         }
         _finish(task_dir, state, view, fields, cancelled=cancelled, timed_out=timed_out)
-    return 0
 
 
 def _absorb(
-    view: diagnose.RunView, adapter: Any, event_tail: _Tail, stderr_tail: _Tail
+    view: diagnose.RunView, adapter: WorkerAdapter, event_tail: _Tail, stderr_tail: _Tail
 ) -> diagnose.RunView:
     for line in event_tail.lines():
         for event in adapter.parse_events(line):
@@ -236,9 +243,7 @@ def _finish(
         )
         return
     if source == "final_message":
-        # Only one backend can be handed an output path; the others answer in
-        # their last message. Recording it here means the rest of the system,
-        # and anyone reading the task afterwards, sees one kind of result.
+        # So that a reader of the task finds the result in one place either way.
         store.write_json(Path(state["result_path"]), result)
     problems = envelope.violations(result)
     if problems:

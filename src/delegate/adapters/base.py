@@ -1,11 +1,7 @@
 """What every worker backend must look like from the broker's side.
 
-The broker never reads a backend's own event format. Each adapter maps its
-backend onto these few kinds, and the stall diagnosis works off those alone, so
-adding a backend cannot change how failures are classified.
-
-One line of backend output can mean more than one thing at once, so parsing
-returns a list.
+Stall diagnosis reads only these kinds, so adding a backend cannot change how
+failures are classified. One line of output can mean two things, hence the list.
 """
 
 from __future__ import annotations
@@ -20,7 +16,6 @@ KINDS = (
     "item_completed",
     "turn_completed",
     "runtime_warning",
-    "error",
 )
 
 
