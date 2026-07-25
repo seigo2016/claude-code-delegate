@@ -23,9 +23,7 @@ def test_the_thread_announcement_becomes_the_session_identity() -> None:
 
 
 def test_a_started_tool_call_keeps_its_identity_and_type() -> None:
-    raw = json.dumps(
-        {"type": "item.started", "item": {"id": "it-1", "type": "command_execution"}}
-    )
+    raw = json.dumps({"type": "item.started", "item": {"id": "it-1", "type": "command_execution"}})
 
     event = ADAPTER.parse_event(raw)
 
