@@ -13,9 +13,8 @@ from typing import Any
 from delegate.adapters.base import NormalizedEvent
 
 # A worker cannot answer an interactive permission prompt, and bypassing every
-# check would let a bounded task do unbounded things. Of the modes on offer, this
-# is the only one that does neither: a command with no matching rule is classified
-# rather than put to a person who is not there, or waved through.
+# check would let a bounded task do unbounded things. Of the modes on offer, only
+# this one does neither: a command with no matching rule is classified.
 PERMISSION_MODE = "auto"
 
 #: Withholding these is enough: the classifier was measured turning down the ways
@@ -56,10 +55,9 @@ class ClaudeAdapter:
         ]
         if writes_allowed:
             # Holding the tool is not permission to use it: under `auto` each write
-            # was still put to someone, and a task that declared where it would
-            # write was refused there. Which paths it may touch is answered by the
-            # scope check afterwards; a per-path allowance was tried and matched
-            # nothing.
+            # was still put to someone who was not there. Which paths may be touched
+            # is answered by the scope check afterwards; a per-path allowance was
+            # tried and matched nothing, not even the path it named.
             command.extend(["--allowedTools", *EDITING_TOOLS])
         else:
             command.extend(["--disallowed-tools", *EDITING_TOOLS])

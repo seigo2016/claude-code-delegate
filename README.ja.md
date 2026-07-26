@@ -40,7 +40,7 @@ frontier = { model = "opus", effort = "xhigh" }
 level = "standard"
 ```
 
-この repository の `examples/delegate.toml` には 6 つの role と 3 つの backend が、すべて無効の状態で入っています。宣言するまで何も有効になりません。
+この repository の `examples/delegate.toml` には 6 つの role と 3 つの backend が、すべて無効の状態で入っています。
 
 あとは Claude Code の session で指示します。
 

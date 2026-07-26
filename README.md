@@ -47,7 +47,7 @@ level = "standard"
 ```
 
 `examples/delegate.toml` in this repository carries all six roles and all three
-backends, switched off. Nothing is enabled until you say so.
+backends, switched off.
 
 Then, in a Claude Code session:
 
