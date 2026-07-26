@@ -170,7 +170,11 @@ def submit(
         "adapter": plan.adapter,
         "model": plan.model,
         "effort": plan.effort,
-        "timeout_sec": timeout if timeout is not None else plan.timeout,
+        # Decided here rather than at run time so that a finished task can still
+        # answer what its worker was allowed to do.
+        "writes_allowed": bool(value["allowed_writes"]),
+        "runs_commands": plan.role.runs_commands,
+        "timeout_sec": plan.timeout,
         "pid": None,
         "session_id": None,
         "exit_code": None,

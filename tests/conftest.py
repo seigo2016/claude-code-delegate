@@ -31,6 +31,14 @@ level = "standard"
 [roles.bounded-implementer]
 level = "standard"
 requires_allowed_writes = true
+
+[roles.verification-runner]
+level = "standard"
+runs_commands = true
+
+[roles.impatient]
+level = "standard"
+timeout = 1
 """
 
 FAKE_WORKER = r"""#!/usr/bin/env python3

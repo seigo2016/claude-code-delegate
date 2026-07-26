@@ -27,13 +27,18 @@ class OpenCodeAdapter:
         schema_path: Path,
         model: str,
         effort: str,
+        writes_allowed: bool,
+        runs_commands: bool,
     ) -> list[str]:
+        # opencode has no per-run permission flag, and was measured writing a file
+        # and running a shell command without `--auto`, the flag its own help calls
+        # dangerous. So a read-only task is read-only here by instruction only.
+        del writes_allowed, runs_commands
         return [
             "opencode",
             "run",
             "--format",
             "json",
-            "--auto",
             "--dir",
             str(project_root),
             "-m",

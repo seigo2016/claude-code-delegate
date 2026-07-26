@@ -133,7 +133,7 @@ def test_a_result_that_breaks_the_contract_is_a_failure_and_the_text_is_kept(
 
 def test_a_task_that_runs_out_of_time_records_where_it_stopped(workspace: Workspace) -> None:
     workspace.mode("tool_hang")
-    handle = workspace.submit("--timeout", "1")
+    handle = workspace.submit(role="impatient")
 
     state = wait_for_terminal(workspace, handle["task_id"])
 
@@ -145,7 +145,7 @@ def test_a_worker_that_finished_but_never_handed_back_a_result_is_named_as_such(
     workspace: Workspace,
 ) -> None:
     workspace.mode("finalization_hang")
-    handle = workspace.submit("--timeout", "1")
+    handle = workspace.submit(role="impatient")
 
     state = wait_for_terminal(workspace, handle["task_id"])
 
@@ -156,7 +156,7 @@ def test_a_worker_that_finished_but_never_handed_back_a_result_is_named_as_such(
 
 def test_the_recovered_message_is_not_promoted_to_a_result(workspace: Workspace) -> None:
     workspace.mode("finalization_hang")
-    handle = workspace.submit("--timeout", "1")
+    handle = workspace.submit(role="impatient")
     wait_for_terminal(workspace, handle["task_id"])
 
     envelope = workspace.run("collect", handle["task_id"])

@@ -33,6 +33,9 @@ class Sample:
     session_id: str
     final_line: str
     tool_started_line: str | None
+    #: The run of arguments that appears only when the task declared no writes. None
+    #: where the backend offers no per-run permission flag to say it with.
+    read_only_flags: tuple[str, ...] | None
 
 
 SAMPLES = {
@@ -49,6 +52,7 @@ SAMPLES = {
         tool_started_line=json.dumps(
             {"type": "item.started", "item": {"id": "i-1", "type": "command_execution"}}
         ),
+        read_only_flags=("--sandbox", "read-only"),
     ),
     "opencode": Sample(
         adapter=opencode.OpenCodeAdapter(),
@@ -79,6 +83,7 @@ SAMPLES = {
                 },
             }
         ),
+        read_only_flags=None,
     ),
     "claude": Sample(
         adapter=claude.ClaudeAdapter(),
@@ -96,6 +101,7 @@ SAMPLES = {
             }
         ),
         tool_started_line=None,
+        read_only_flags=("--disallowed-tools", "Edit", "Write", "NotebookEdit"),
     ),
 }
 
@@ -144,20 +150,94 @@ def test_an_unfinished_tool_call_is_visible_where_the_backend_reports_one(
     assert event.item_id and event.item_type
 
 
-def test_the_command_carries_the_model_and_the_effort(sample: Sample, tmp_path: Path) -> None:
+def contains(command: list[str], run: tuple[str, ...]) -> bool:
+    return any(tuple(command[i : i + len(run)]) == run for i in range(len(command)))
+
+
+def build(
+    sample: Sample, tmp_path: Path, *, writes_allowed: bool, runs_commands: bool = False
+) -> list[str]:
     prompt = tmp_path / "prompt.md"
     prompt.write_text("do the thing", encoding="utf-8")
-
-    command = sample.adapter.build_command(
+    return sample.adapter.build_command(
         project_root=tmp_path,
         prompt_path=prompt,
         result_path=tmp_path / "result.json",
         schema_path=tmp_path / "result.schema.json",
         model="a-model",
         effort="high",
+        writes_allowed=writes_allowed,
+        runs_commands=runs_commands,
     )
+
+
+def test_the_command_carries_the_model_and_the_effort(sample: Sample, tmp_path: Path) -> None:
+    command = build(sample, tmp_path, writes_allowed=True)
 
     assert command[0] == sample.adapter.name
     joined = " ".join(command)
     assert "a-model" in joined
     assert "high" in joined
+
+
+def test_a_task_that_declared_no_writes_is_told_so_in_the_command(
+    sample: Sample, tmp_path: Path
+) -> None:
+    if sample.read_only_flags is None:
+        pytest.skip(f"{sample.adapter.name} has no per-run permission flag to say it with")
+
+    reading = build(sample, tmp_path, writes_allowed=False)
+    writing = build(sample, tmp_path, writes_allowed=True)
+
+    assert contains(reading, sample.read_only_flags)
+    assert not contains(writing, sample.read_only_flags)
+
+
+def test_a_role_that_runs_commands_gets_a_filesystem_it_can_write_to(
+    sample: Sample, tmp_path: Path
+) -> None:
+    # Reads oddly on purpose: a task that declared no writes still gets a writable
+    # filesystem here, because a test run needs one.
+    if sample.adapter.name != "codex":
+        pytest.skip(f"{sample.adapter.name} does not stand on a filesystem")
+
+    command = build(sample, tmp_path, writes_allowed=False, runs_commands=True)
+
+    assert contains(command, ("--sandbox", "workspace-write"))
+
+
+def test_running_commands_does_not_buy_the_right_to_edit(sample: Sample, tmp_path: Path) -> None:
+    if sample.adapter.name != "claude":
+        pytest.skip(f"{sample.adapter.name} does not withhold tools")
+
+    command = build(sample, tmp_path, writes_allowed=False, runs_commands=True)
+
+    assert contains(command, ("--disallowed-tools", "Edit", "Write", "NotebookEdit"))
+
+
+def test_a_run_that_was_refused_things_says_so(sample: Sample) -> None:
+    # The run below succeeded. Refusals do not fail one, which is why they have to
+    # be carried out of it.
+    if sample.adapter.name != "claude":
+        pytest.skip(f"{sample.adapter.name} does not report permission denials")
+
+    line = json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": "c8aae049",
+            "result": FINAL,
+            "permission_denials": [
+                {"tool_name": "Bash", "tool_use_id": "t1"},
+                {"tool_name": "Bash", "tool_use_id": "t2"},
+            ],
+        }
+    )
+
+    events = sample.adapter.parse_events(line)
+
+    assert [e.text for e in events if e.kind == "runtime_warning"] == [
+        "permission_denied",
+        "permission_denied",
+    ]

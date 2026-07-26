@@ -14,6 +14,24 @@ from test_lifecycle import wait_for_terminal
 SCOPED = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
 
 
+def test_the_declared_scope_also_decides_what_the_worker_is_permitted(
+    workspace: Workspace,
+) -> None:
+    reading = workspace.submit()
+    writing = workspace.submit(packet=SCOPED, role="bounded-implementer")
+
+    assert workspace.run("status", reading["task_id"])["writes_allowed"] is False
+    assert workspace.run("status", writing["task_id"])["writes_allowed"] is True
+
+
+def test_a_role_that_runs_commands_is_recorded_as_one(workspace: Workspace) -> None:
+    auditing = workspace.submit()
+    verifying = workspace.submit(role="verification-runner")
+
+    assert workspace.run("status", auditing["task_id"])["runs_commands"] is False
+    assert workspace.run("status", verifying["task_id"])["runs_commands"] is True
+
+
 def test_writing_inside_the_declared_scope_is_accepted(workspace: Workspace) -> None:
     workspace.mode("writes_allowed")
 

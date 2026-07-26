@@ -3,10 +3,25 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
 from delegate.adapters.base import NormalizedEvent
+
+
+def cache_root() -> Path:
+    """Where build tools keep the cache they insist on writing to.
+
+    `workspace-write` covers the repository and the temporary directory, but not the
+    home directory, and `uv run pytest` was measured stopping before pytest started
+    because it could not open its cache there.
+    """
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches"
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+
 
 # Codex retries its model list in the background; repeated timeouts there mean
 # the run is stuck rather than working.
@@ -28,7 +43,13 @@ class CodexAdapter:
         schema_path: Path,
         model: str,
         effort: str,
+        writes_allowed: bool,
+        runs_commands: bool,
     ) -> list[str]:
+        # What keeps a role that runs commands off the repository is the scope check
+        # afterwards, not the sandbox.
+        writable = writes_allowed or runs_commands
+        roots = json.dumps([str(cache_root())]) if writable else "[]"
         return [
             "codex",
             "exec",
@@ -41,6 +62,16 @@ class CodexAdapter:
             model,
             "-c",
             f'model_reasoning_effort="{effort}"',
+            # Left to ~/.codex/config.toml, how far a worker can reach is decided by
+            # a file this project does not own, and differs from machine to machine.
+            "--sandbox",
+            "workspace-write" if writable else "read-only",
+            "-c",
+            'approval_policy="never"',
+            "-c",
+            f"sandbox_workspace_write.network_access={str(writable).lower()}",
+            "-c",
+            f"sandbox_workspace_write.writable_roots={roots}",
             "--output-schema",
             str(schema_path),
             "--disable",

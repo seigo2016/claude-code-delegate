@@ -158,9 +158,29 @@ Not detected:
 - network effects, credential access, or anything git does not represent
 - a result that satisfies the contract and is still wrong
 
-There is no sandbox: workers run with whatever their own CLI grants them. The
-adapters follow three CLIs whose event shapes were recorded from real runs, and a
-backend release can move them.
+What a sandbox stops before the fact depends on the backend. A task that declared
+no writes gets the narrowest posture its backend has:
+
+| backend | a task that may not write | enforced by |
+|---|---|---|
+| codex | `--sandbox read-only`, network closed | the operating system |
+| claude | `auto`, minus the editing tools | a classifier, and tools withheld |
+| opencode | no per-run flag to set | the prompt alone |
+
+Only codex refuses in the kernel: an attempt to write came back `Read-only file
+system`. Claude Code is not handed the editing tools, and its classifier turned
+down every way round them that was tried: a shell redirect, `tee`, and a Python
+one-liner. That is a judgement made each time rather than a boundary. opencode was
+measured writing a file and running a shell command with no permission flag passed
+at all, so a read-only task on that backend is read-only by request.
+
+A role that runs tests or builds gets a writable filesystem even when it may not
+change the repository, because build tools write caches under the home directory.
+Nothing then stops such a run from touching the repository; the scope check above
+catches it afterwards.
+
+The adapters follow three CLIs whose event shapes were recorded from real runs,
+and a backend release can move them.
 
 ## Development
 

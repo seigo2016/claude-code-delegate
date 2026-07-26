@@ -28,6 +28,8 @@ def test_the_command_pins_the_root_the_result_contract_and_full_reasoning(tmp_pa
         schema_path=tmp_path / "result.schema.json",
         model="gpt-5.6-terra",
         effort="high",
+        writes_allowed=True,
+        runs_commands=False,
     )
 
     assert command[:4] == ["codex", "exec", "-C", str(tmp_path)]

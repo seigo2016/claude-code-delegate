@@ -120,6 +120,8 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             schema_path=schema_path,
             model=str(state["model"]),
             effort=str(state["effort"]),
+            writes_allowed=bool(state["writes_allowed"]),
+            runs_commands=bool(state["runs_commands"]),
         )
 
         cancelled = False

@@ -40,6 +40,8 @@ class WorkerAdapter(Protocol):
         schema_path: Path,
         model: str,
         effort: str,
+        writes_allowed: bool,
+        runs_commands: bool,
     ) -> list[str]: ...
 
     def parse_events(self, raw_line: str) -> list[NormalizedEvent]: ...

@@ -37,6 +37,7 @@ requires_allowed_writes = true
 
 [roles.verification-runner]
 level = "standard"
+runs_commands = true
 
 [roles.consistency-auditor]
 level = "light"

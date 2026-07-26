@@ -25,6 +25,9 @@ class Role:
     level: str
     timeout: int = DEFAULT_TIMEOUT
     requires_allowed_writes: bool = False
+    #: A build or a test suite writes outside the repository whether or not the task
+    #: may change it, so this is separate from the write scope.
+    runs_commands: bool = False
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,7 @@ def load(path: Path) -> Settings:
             level=str(_required(body, "level", f"roles.{name}")),
             timeout=int(body.get("timeout", DEFAULT_TIMEOUT)),
             requires_allowed_writes=bool(body.get("requires_allowed_writes", False)),
+            runs_commands=bool(body.get("runs_commands", False)),
         )
         for name, body in raw.get("roles", {}).items()
     }
