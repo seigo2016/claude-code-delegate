@@ -59,6 +59,14 @@ def test_a_fenced_answer_is_still_an_answer() -> None:
     assert envelope.from_text(json.dumps(valid())) == valid()
 
 
+def test_an_answer_introduced_by_a_sentence_is_still_an_answer() -> None:
+    announced = (
+        "Based on my analysis, here is the result:\n\n```json\n" + json.dumps(valid()) + "\n```"
+    )
+
+    assert envelope.from_text(announced) == valid()
+
+
 def test_prose_is_not_an_answer() -> None:
     assert envelope.from_text("I looked at the files and they seem fine.") is None
     assert envelope.from_text("[1, 2, 3]") is None

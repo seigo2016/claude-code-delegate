@@ -56,19 +56,31 @@ def from_text(text: str) -> dict[str, Any] | None:
     """The result object inside a worker's message, or None if there isn't one.
 
     Models wrap JSON in a code fence often enough that refusing a fenced answer
-    would fail runs that did the work correctly.
+    would fail runs that did the work correctly, and one was seen introducing the
+    fence with a sentence first. The fields are still checked either way; what is
+    relaxed here is only how the object is found.
     """
     stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.split("\n", 1)[-1] if "\n" in stripped else ""
-        fence = stripped.rfind("```")
-        if fence != -1:
-            stripped = stripped[:fence]
-    try:
-        parsed = json.loads(stripped)
-    except json.JSONDecodeError:
+    for candidate in (stripped, _fenced(stripped)):
+        if candidate is None:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _fenced(text: str) -> str | None:
+    """Whatever sits inside the first code fence, wherever the fence starts."""
+    opening = text.find("```")
+    if opening == -1 or "\n" not in text[opening:]:
         return None
-    return parsed if isinstance(parsed, dict) else None
+    body = text[opening:].split("\n", 1)[1]
+    closing = body.rfind("```")
+    return body[:closing] if closing != -1 else body
 
 
 def json_schema() -> dict[str, Any]:
