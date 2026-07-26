@@ -116,6 +116,8 @@ skill と hook が実行します。人が直接使うのは診断のときだ�
 | `delegate reconcile` | worker が消えた task を分類する |
 | `delegate watch` | hook が実行する。回収できるものを待つ |
 
+`submit` は `--worker <name>` で backend を task ごとに上書きできます。全コマンドが受け取る `--project-root` は、hook が repository ではなくインストール済みの plugin から実行されるために渡すものです。
+
 ## 検出の範囲
 
 検出できる:

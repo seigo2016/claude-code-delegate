@@ -98,6 +98,12 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
 
 
 def _find_duplicate(root: Path, key: str) -> dict[str, Any] | None:
+    """The identical task that is still running, if there is one.
+
+    Only a task still in flight counts. Matching finished ones too would answer a
+    fresh question with an old answer, and the question is usually being asked
+    again because something has changed since.
+    """
     if not root.exists():
         return None
     for path in sorted(root.glob("*/state.json"), reverse=True):
@@ -105,7 +111,7 @@ def _find_duplicate(root: Path, key: str) -> dict[str, Any] | None:
             state = store.read_json(path)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        if state.get("fingerprint") == key:
+        if state.get("fingerprint") == key and state.get("status") in events.ACTIVE_STATES:
             return state
     return None
 
@@ -130,8 +136,6 @@ def submit(
     title: str,
     value: dict[str, Any],
     worker: str | None = None,
-    timeout: int | None = None,
-    fresh: bool = False,
 ) -> dict[str, Any]:
     packet_module.validate(value)
     if value["host_only"]:
@@ -148,10 +152,9 @@ def submit(
     root = task_root(project_root)
     root.mkdir(parents=True, exist_ok=True)
     key = fingerprint(project_root, role, title, value)
-    if not fresh:
-        duplicate = _find_duplicate(root, key)
-        if duplicate is not None:
-            return handle_of(duplicate, deduplicated=True)
+    duplicate = _find_duplicate(root, key)
+    if duplicate is not None:
+        return handle_of(duplicate, deduplicated=True)
 
     task_id = str(uuid.uuid4())
     task_dir = root / task_id

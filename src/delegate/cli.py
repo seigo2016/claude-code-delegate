@@ -55,8 +55,6 @@ def cmd_submit(args: argparse.Namespace) -> int:
             title=args.title,
             value=value,
             worker=args.worker,
-            timeout=args.timeout,
-            fresh=args.fresh,
         )
     except tasks.SubmitRefused as refused:
         return _fail(str(refused), **refused.detail)
@@ -255,8 +253,6 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--title", required=True)
     submit.add_argument("--packet", required=True, help="path to the task packet JSON")
     submit.add_argument("--worker", default=None)
-    submit.add_argument("--timeout", type=int, default=None)
-    submit.add_argument("--fresh", action="store_true")
     submit.set_defaults(func=cmd_submit)
 
     status = with_root(sub.add_parser("status", help="read one task's state"))

@@ -142,6 +142,10 @@ something.
 | `delegate reconcile` | classify tasks whose worker is gone |
 | `delegate watch` | what the hook runs; waits for something to collect |
 
+`submit` takes `--worker <name>` to override the backend for one task. Every
+command takes `--project-root`, which the hooks pass because they run from the
+installed plugin rather than from the repository.
+
 ## What is and is not checked
 
 Detected:

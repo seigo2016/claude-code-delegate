@@ -46,6 +46,10 @@ delegate submit --role artifact-auditor --title changelog-vs-tags --packet /tmp/
 
 Role instructions, the model, the prohibitions and the result contract are added for you. Do not repeat them in the packet.
 
+The backend is chosen for you too. `--worker <name>` overrides it for one task: worth doing when the work suits a particular backend, or when a conclusion matters enough to check twice by different means. The role still asks for a level, never a model, so the same packet runs anywhere.
+
+Submitting the same packet twice while the first is still running gives you that same task back, marked `deduplicated`. After it has finished, a repeat submit starts a new task.
+
 **A result holds at most five short strings per list.** That cap is the point: a worker that hands back forty lines has moved the reading back into this session. When the result is genuinely a long list, such as an inventory or every occurrence of something, ask for it as a file and let the worker return the path:
 
 ```json

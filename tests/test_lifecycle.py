@@ -165,7 +165,9 @@ def test_the_recovered_message_is_not_promoted_to_a_result(workspace: Workspace)
     assert envelope["result"] is None
 
 
-def test_the_same_request_twice_reuses_the_first_task(workspace: Workspace) -> None:
+def test_the_same_request_twice_while_it_is_running_reuses_the_first_task(
+    workspace: Workspace,
+) -> None:
     workspace.mode("silent_hang")
     first = workspace.submit()
 
@@ -174,11 +176,17 @@ def test_the_same_request_twice_reuses_the_first_task(workspace: Workspace) -> N
     assert second["task_id"] == first["task_id"]
     assert second["deduplicated"] is True
 
-    third = workspace.submit("--fresh")
-    assert third["task_id"] != first["task_id"]
-
     workspace.run("cancel", first["task_id"])
-    workspace.run("cancel", third["task_id"])
+
+
+def test_the_same_request_after_it_finished_is_asked_again(workspace: Workspace) -> None:
+    first = workspace.submit()
+    wait_for_terminal(workspace, first["task_id"])
+
+    second = workspace.submit()
+
+    assert second["task_id"] != first["task_id"]
+    assert second["deduplicated"] is False
 
 
 def test_host_only_work_never_starts_a_worker(workspace: Workspace) -> None:
