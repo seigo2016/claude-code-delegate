@@ -206,6 +206,19 @@ def test_a_role_that_runs_commands_gets_a_filesystem_it_can_write_to(
     assert contains(command, ("--sandbox", "workspace-write"))
 
 
+def test_a_task_that_declared_writes_is_allowed_to_make_them(
+    sample: Sample, tmp_path: Path
+) -> None:
+    # Being handed the editing tools was not enough: every write was still put to
+    # someone who was not there, and the task failed having done the work.
+    if sample.adapter.name != "claude":
+        pytest.skip(f"{sample.adapter.name} has no tool allowance to give")
+
+    command = build(sample, tmp_path, writes_allowed=True)
+
+    assert contains(command, ("--allowedTools", "Edit", "Write", "NotebookEdit"))
+
+
 def test_running_commands_does_not_buy_the_right_to_edit(sample: Sample, tmp_path: Path) -> None:
     if sample.adapter.name != "claude":
         pytest.skip(f"{sample.adapter.name} does not withhold tools")

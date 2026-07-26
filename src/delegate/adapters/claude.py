@@ -54,7 +54,14 @@ class ClaudeAdapter:
             "--permission-mode",
             PERMISSION_MODE,
         ]
-        if not writes_allowed:
+        if writes_allowed:
+            # Holding the tool is not permission to use it: under `auto` each write
+            # was still put to someone, and a task that declared where it would
+            # write was refused there. Which paths it may touch is answered by the
+            # scope check afterwards; a per-path allowance was tried and matched
+            # nothing.
+            command.extend(["--allowedTools", *EDITING_TOOLS])
+        else:
             command.extend(["--disallowed-tools", *EDITING_TOOLS])
         return command
 
