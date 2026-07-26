@@ -186,6 +186,23 @@ catches it afterwards.
 The adapters follow three CLIs whose event shapes were recorded from real runs,
 and a backend release can move them.
 
+## Not yet
+
+Three things were left out rather than overlooked.
+
+**Making delegation compulsory.** A `PreToolUse` hook can refuse a tool call, so a
+setting could turn the skill from something Claude may reach for into something it
+has to. Left out for now: Claude was measured delegating a large reading job
+unprompted and doing a two-file check itself, and a refusal that is walked around
+by doing the same work another way is not enforcement.
+
+**A read-only posture for opencode.** It has no per-run permission flag, so a task
+that declared no writes is asked there rather than stopped.
+
+**Isolation.** Workers run in the work tree you are working in. A worktree each
+would contain them, but `bounded-implementer` exists to change that tree, so the
+containment would have to be undone to be useful.
+
 ## Development
 
 ```bash
