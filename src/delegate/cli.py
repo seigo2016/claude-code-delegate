@@ -9,7 +9,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from delegate import config, events, liveness, runner, store, tasks
 
@@ -22,7 +22,7 @@ def _print(value: dict[str, Any]) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True))
 
 
-def _fail(message: str, code: int = 2, **detail: Any) -> int:
+def _fail(message: str, code: int = 1, **detail: Any) -> int:
     _print({"error": message, **detail})
     return code
 
@@ -186,11 +186,18 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     return 0
 
 
+#: An ``asyncRewake`` hook wakes the session on exit code 2 and on no other code,
+#: and the woken session is handed the hook's output in place of a task list. So 2
+#: is reserved, here and in the launcher, for a task being ready.
+WAKE = 2
+QUIET = 0
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     """Wait until something is worth waking the session for.
 
-    Exit 0 means there is a finished, uncollected task. Any other exit means the
-    session should be left alone.
+    Exit ``WAKE`` means there is a finished, uncollected task. Exit ``QUIET`` means
+    the session should be left alone.
     """
     project_root = _root(args.project_root)
     try:
@@ -200,7 +207,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
         # A watcher starts after every Bash call; without this they would pile
         # up and each wake the session about the same finished task.
         _print({"ready": []})
-        return 1
+        return QUIET
 
 
 def _wait_for_something_to_collect(project_root: Path) -> int:
@@ -215,16 +222,28 @@ def _wait_for_something_to_collect(project_root: Path) -> int:
         ]
         if ready:
             _print({"ready": [_line(state) for state in ready]})
-            return 0
+            return WAKE
         waiting = any(state["status"] in events.ACTIVE_STATES for state in states)
         if not waiting or time.monotonic() >= deadline:
             _print({"ready": []})
-            return 1
+            return QUIET
         time.sleep(WATCH_POLL_SEC)
 
 
+class _Parser(argparse.ArgumentParser):
+    """An argument parser that does not exit 2, since argparse's 2 means ``WAKE`` here.
+
+    A hook written by one version of this plugin can outlive the CLI it calls.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        print(f"delegate: {message}", file=sys.stderr)
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="delegate", description=__doc__)
+    parser = _Parser(prog="delegate", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     def with_root(target: argparse.ArgumentParser) -> argparse.ArgumentParser:

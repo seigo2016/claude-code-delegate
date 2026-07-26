@@ -92,7 +92,7 @@ def run(task_dir: Path) -> int:
             task_dir / "events.jsonl",
             {"ts": events.now_iso(), "task_id": state["task_id"], "refused": "already_supervised"},
         )
-        return 2
+        return 1
     return 0
 
 

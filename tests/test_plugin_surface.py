@@ -11,6 +11,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from delegate import config
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -61,6 +63,20 @@ def test_the_finished_task_hook_wakes_the_session_instead_of_blocking_it() -> No
     assert hook["asyncRewake"] is True
     assert hook["rewakeMessage"]
     assert "watch" in hook["command"]
+    # asyncRewake is documented as implying async, but only backgrounds the hook in
+    # an interactive session. Under `claude -p` this one would run in the foreground
+    # and hold up the call that triggered it for the whole of its timeout.
+    assert hook["async"] is True
+
+
+def test_the_hook_waits_longer_than_a_task_is_allowed_to_run() -> None:
+    # A watcher that gives up first leaves the finished task uncollected until
+    # some later Bash call happens to start another one.
+    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+
+    (hook,) = hooks["PostToolUse"][0]["hooks"]
+
+    assert hook["timeout"] > config.DEFAULT_TIMEOUT
 
 
 def test_the_skill_and_the_chair_agent_declare_themselves() -> None:
@@ -96,6 +112,22 @@ def test_the_example_settings_enable_nothing_the_reader_did_not_choose() -> None
     assert any(line.startswith("[workers.") for line in settings)
 
 
+def test_nothing_but_a_ready_task_exits_with_the_code_that_wakes_the_session(
+    tmp_path: Path,
+) -> None:
+    # The launcher runs as an asyncRewake hook after every Bash call, where 2 is
+    # the signal that a task is ready. Any other route to 2 wakes the session with
+    # its own output standing in for the list of finished tasks.
+    bad_flag = subprocess.run(
+        [str(ROOT / "bin" / "delegate"), "watch", "--no-such-flag"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+
+    assert bad_flag.returncode != 2, bad_flag.stderr
+
+
 def test_the_entrypoint_says_what_is_missing_when_python_is_too_old(tmp_path: Path) -> None:
     # macOS ships 3.9 as python3, and tomllib arrived in 3.11. Failing with an
     # ImportError from a file the reader has never opened helps nobody.
@@ -113,5 +145,5 @@ def test_the_entrypoint_says_what_is_missing_when_python_is_too_old(tmp_path: Pa
         env={"PATH": f"{fake}:/usr/bin:/bin"},
     )
 
-    assert result.returncode != 0
+    assert result.returncode not in (0, 2), "2 would wake the session with this message"
     assert "3.11" in result.stderr
