@@ -28,10 +28,26 @@ a result. None of those comes back as success.
 ```bash
 claude plugin marketplace add seigo2016/claude-code-delegate
 claude plugin install delegate@claude-code-delegate --scope project
-
-cp examples/delegate.toml .claude/delegate.toml
-# set enabled = true on one worker, and fill in its models
 ```
+
+Then write `.claude/delegate.toml` in your project, naming one backend you have:
+
+```toml
+default_worker = "claude"
+
+[workers.claude]
+adapter = "claude"
+enabled = true
+light = { model = "haiku", effort = "medium" }
+standard = { model = "sonnet", effort = "high" }
+frontier = { model = "opus", effort = "xhigh" }
+
+[roles.artifact-auditor]
+level = "standard"
+```
+
+`examples/delegate.toml` in this repository carries all six roles and all three
+backends, switched off. Nothing is enabled until you say so.
 
 Then, in a Claude Code session:
 
@@ -51,20 +67,6 @@ Installing the plugin replaces no agent, removes no tool, and enables no backend
 until you declare one.
 
 ## Configuration
-
-```toml
-default_worker = "claude"
-
-[workers.claude]
-adapter = "claude"
-enabled = true
-light = { model = "haiku", effort = "medium" }
-standard = { model = "sonnet", effort = "high" }
-frontier = { model = "opus", effort = "xhigh" }
-
-[roles.artifact-auditor]
-level = "standard"
-```
 
 A role asks for a level, never a model, and each worker says what that level
 means for itself. The same roles therefore work whichever backend is configured,

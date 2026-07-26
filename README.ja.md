@@ -22,10 +22,25 @@ worker は止まることも、死ぬことも、何も返さないことも、�
 ```bash
 claude plugin marketplace add seigo2016/claude-code-delegate
 claude plugin install delegate@claude-code-delegate --scope project
-
-cp examples/delegate.toml .claude/delegate.toml
-# worker を 1 つ enabled = true にし、model を書く
 ```
+
+続けて、自分の project に `.claude/delegate.toml` を置き、手元にある backend を 1 つ書きます。
+
+```toml
+default_worker = "claude"
+
+[workers.claude]
+adapter = "claude"
+enabled = true
+light = { model = "haiku", effort = "medium" }
+standard = { model = "sonnet", effort = "high" }
+frontier = { model = "opus", effort = "xhigh" }
+
+[roles.artifact-auditor]
+level = "standard"
+```
+
+この repository の `examples/delegate.toml` には 6 つの role と 3 つの backend が、すべて無効の状態で入っています。宣言するまで何も有効になりません。
 
 あとは Claude Code の session で指示します。
 
@@ -42,20 +57,6 @@ Claude が task を組み立てて worker へ渡し、turn を終えます。wor
 plugin を install しても、main agent は差し替わらず、tool も外れず、backend も設定で宣言するまで 1 つも使われません。
 
 ## 設定
-
-```toml
-default_worker = "claude"
-
-[workers.claude]
-adapter = "claude"
-enabled = true
-light = { model = "haiku", effort = "medium" }
-standard = { model = "sonnet", effort = "high" }
-frontier = { model = "opus", effort = "xhigh" }
-
-[roles.artifact-auditor]
-level = "standard"
-```
 
 role が指定するのは level であり、model 名ではありません。その level が何を意味するかは worker 側が定義します。そのため同じ role をどの backend でも使え、`--worker` で task ごとに選べます。選んだ worker がその level を定義していなければ、起動する前に拒否します。
 
