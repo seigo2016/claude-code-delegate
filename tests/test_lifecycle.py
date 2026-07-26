@@ -7,6 +7,8 @@ delivered exactly once, and nothing that went wrong is ever reported as success.
 from __future__ import annotations
 
 import json
+import os
+import signal
 import time
 from pathlib import Path
 
@@ -220,17 +222,15 @@ def test_a_worker_that_vanished_is_reclassified_rather_than_left_running(
 ) -> None:
     workspace.mode("silent_hang")
     handle = workspace.submit()
-    state = workspace.run("status", handle["task_id"])
-    task_dir = Path(state["task_dir"])
+
+    # Wait for the state, not for the lock. The supervisor takes the lock before it
+    # records `running`, and a task killed in that gap is still inside the startup
+    # grace that reconcile allows, so it is left alone rather than declared orphaned.
+    while workspace.run("status", handle["task_id"])["status"] != "running":
+        time.sleep(0.02)
 
     # Kill the worker the way a reboot would: no chance to record anything.
-    import signal
-
-    while not (task_dir / "worker.lock").exists():
-        time.sleep(0.02)
     os_pid = workspace.run("status", handle["task_id"])["pid"]
-    import os
-
     os.killpg(os.getpgid(os_pid), signal.SIGKILL)
     time.sleep(0.2)
 
