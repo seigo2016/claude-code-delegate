@@ -82,6 +82,57 @@ def test_the_hook_watches_the_root_returned_by_cross_repo_submit(
     assert ready[0]["project_root"] == str(workspace.repo)
 
 
+def test_the_hook_accepts_a_handle_after_packet_setup_output(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    handle = workspace.submit()
+
+    result = hook_watch(
+        workspace,
+        f"packet created\n{json.dumps(handle)}",
+        cwd=tmp_path,
+        seconds="20",
+    )
+
+    assert result.returncode == WAKE
+    assert json.loads(result.stdout)["ready"][0]["task_id"] == handle["task_id"]
+
+
+def test_the_hook_accepts_a_handle_before_other_bash_output(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    handle = workspace.submit()
+
+    result = hook_watch(
+        workspace,
+        f"{json.dumps(handle)}\npacket retained at /tmp/task.json",
+        cwd=tmp_path,
+        seconds="20",
+    )
+
+    assert result.returncode == WAKE
+    assert json.loads(result.stdout)["ready"][0]["task_id"] == handle["task_id"]
+
+
+def test_the_hook_ignores_json_that_does_not_name_a_task(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    result = hook_watch(
+        workspace,
+        json.dumps(
+            {
+                "completion_delivery": "async_rewake",
+                "project_root": str(workspace.repo),
+                "task_id": "not-a-task",
+            }
+        ),
+        cwd=tmp_path,
+    )
+
+    assert result.returncode == QUIET
+    assert json.loads(result.stdout)["ready"] == []
+
+
 def test_the_hook_ignores_a_bash_result_that_is_not_a_delegate_handle(
     workspace: Workspace, tmp_path: Path
 ) -> None:

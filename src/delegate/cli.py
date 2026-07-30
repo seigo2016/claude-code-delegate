@@ -196,6 +196,25 @@ WAKE = 2
 QUIET = 0
 
 
+def _handle_from_stdout(stdout: str) -> dict[str, Any]:
+    handles = []
+    for line in stdout.splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(value, dict)
+            and value.get("completion_delivery") == "async_rewake"
+            and isinstance(value.get("project_root"), str)
+            and isinstance(value.get("task_id"), str)
+        ):
+            handles.append(value)
+    if len(handles) != 1:
+        raise ValueError("expected one delegate handle")
+    return handles[0]
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     """Wait until something is worth waking the session for.
 
@@ -210,7 +229,7 @@ def cmd_hook_watch(args: argparse.Namespace) -> int:
     try:
         hook_input = json.load(sys.stdin)
         stdout = hook_input["tool_response"]["stdout"]
-        handle = json.loads(stdout)
+        handle = _handle_from_stdout(stdout)
         project_root = _root(handle["project_root"])
         _, state = _load_task(project_root, handle["task_id"])
     except (KeyError, TypeError, OSError, ValueError, json.JSONDecodeError):
