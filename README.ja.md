@@ -111,13 +111,13 @@ skill と hook が実行します。人が直接使うのは診断のときだ�
 | コマンド | 用途 |
 |---|---|
 | `delegate submit --role R --title T --packet P` | worker を起動し handle を受け取る |
-| `delegate collect <task-id>` | 結果を 1 度だけ回収する |
+| `delegate collect <task-id> --project-root ROOT` | 結果を 1 度だけ回収する |
 | `delegate status <task-id>` | 明示的な診断。待機ループには使わない |
 | `delegate cancel <task-id>` | 誤った task や暴走した task を止める |
 | `delegate reconcile` | worker が消えた task を分類する |
 | `delegate watch` | hook が実行する。回収できるものを待つ |
 
-`submit` は `--worker <name>` で backend を task ごとに上書きできます。全コマンドが受け取る `--project-root` は、hook が repository ではなくインストール済みの plugin から実行されるために渡すものです。
+`submit` は `--worker <name>` で backend を task ごとに上書きできます。全コマンドが `--project-root` を受け取ります。submit handle と完了通知にも正規化済みの root が含まれるため、cross-repository task は submit 時と同じ ledger から回収されます。
 
 ## 検出の範囲
 

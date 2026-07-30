@@ -142,6 +142,7 @@ def _line(state: dict[str, Any]) -> dict[str, Any]:
     """One task, short enough to read at a glance in a session start."""
     return {
         "task_id": state["task_id"],
+        "project_root": state["project_root"],
         "title": state["title"],
         "role": state["role"],
         "status": state["status"],
@@ -201,15 +202,69 @@ def cmd_watch(args: argparse.Namespace) -> int:
     Exit ``WAKE`` means there is a finished, uncollected task. Exit ``QUIET`` means
     the session should be left alone.
     """
-    project_root = _root(args.project_root)
+    return _watch(_root(args.project_root))
+
+
+def cmd_hook_watch(args: argparse.Namespace) -> int:
+    """Watch only when the Bash result is a handle returned by ``delegate submit``."""
+    try:
+        hook_input = json.load(sys.stdin)
+        stdout = hook_input["tool_response"]["stdout"]
+        handle = json.loads(stdout)
+        project_root = _root(handle["project_root"])
+        _, state = _load_task(project_root, handle["task_id"])
+    except (KeyError, TypeError, OSError, ValueError, json.JSONDecodeError):
+        _print({"ready": []})
+        return QUIET
+    if (
+        hook_input.get("hook_event_name") != "PostToolUse"
+        or hook_input.get("tool_name") != "Bash"
+        or handle.get("completion_delivery") != "async_rewake"
+        or state.get("project_root") != str(project_root)
+        or state.get("task_id") != handle.get("task_id")
+    ):
+        _print({"ready": []})
+        return QUIET
+    return _watch_task(project_root, state["task_id"])
+
+
+def _watch(project_root: Path) -> int:
     try:
         with liveness.hold(tasks.task_root(project_root) / "watch.lock"):
             return _wait_for_something_to_collect(project_root)
     except liveness.AlreadyHeld:
-        # A watcher starts after every Bash call; without this they would pile
-        # up and each wake the session about the same finished task.
+        # Deduplicated submissions can return the same active task handle.
         _print({"ready": []})
         return QUIET
+
+
+def _watch_task(project_root: Path, task_id: str) -> int:
+    task_dir = tasks.task_root(project_root) / task_id
+    try:
+        with liveness.hold(task_dir / "watch.lock"):
+            return _wait_for_task(project_root, task_id)
+    except liveness.AlreadyHeld:
+        _print({"ready": []})
+        return QUIET
+
+
+def _wait_for_task(project_root: Path, task_id: str) -> int:
+    limit = float(os.environ.get("DELEGATE_WATCH_SEC", "3600"))
+    deadline = time.monotonic() + limit
+    while True:
+        try:
+            _, state = _load_task(project_root, task_id)
+        except (OSError, ValueError, json.JSONDecodeError):
+            _print({"ready": []})
+            return QUIET
+        state = _reconcile_state(state)
+        if state["status"] in events.TERMINAL_STATES and not state.get("delivered_at"):
+            _print({"ready": [_line(state)]})
+            return WAKE
+        if state["status"] not in events.ACTIVE_STATES or time.monotonic() >= deadline:
+            _print({"ready": []})
+            return QUIET
+        time.sleep(WATCH_POLL_SEC)
 
 
 def _wait_for_something_to_collect(project_root: Path) -> int:
@@ -276,6 +331,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     watch = with_root(sub.add_parser("watch", help="wait until a task is worth collecting"))
     watch.set_defaults(func=cmd_watch)
+
+    hook_watch = sub.add_parser("_hook-watch", help=argparse.SUPPRESS)
+    hook_watch.set_defaults(func=cmd_hook_watch)
 
     run = sub.add_parser("_run", help=argparse.SUPPRESS)
     run.add_argument("task_dir")

@@ -18,11 +18,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/delegate\" watch --project-root \"${CLAUDE_PROJECT_DIR:-$PWD}\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/delegate\" _hook-watch",
             "timeout": 3900,
             "async": true,
             "asyncRewake": true,
-            "rewakeMessage": "A delegated task finished. Collect its result with `delegate collect <task-id>`, weigh the evidence, and carry on with what the user asked for.",
+            "rewakeMessage": "A delegated task finished. Use the task_id and project_root in the notification to collect it exactly once, weigh the evidence, and carry on with what the user asked for.",
             "rewakeSummary": "Delegated task finished"
           }
         ]

@@ -62,7 +62,8 @@ def test_the_finished_task_hook_wakes_the_session_instead_of_blocking_it() -> No
     assert post["matcher"] == "Bash"
     assert hook["asyncRewake"] is True
     assert hook["rewakeMessage"]
-    assert "watch" in hook["command"]
+    assert "_hook-watch" in hook["command"]
+    assert "CLAUDE_PROJECT_DIR" not in hook["command"]
     # asyncRewake is documented as implying async, but only backgrounds the hook in
     # an interactive session. Under `claude -p` this one would run in the foreground
     # and hold up the call that triggered it for the whole of its timeout.

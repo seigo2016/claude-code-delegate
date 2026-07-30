@@ -14,7 +14,9 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from conftest import Workspace
 from delegate import liveness
@@ -33,11 +35,109 @@ def watch(workspace: Workspace, seconds: str = "1") -> subprocess.CompletedProce
     )
 
 
+def hook_watch(
+    workspace: Workspace,
+    tool_stdout: str,
+    *,
+    cwd: Path,
+    seconds: str = "1",
+) -> subprocess.CompletedProcess[str]:
+    hook_input = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_response": {
+            "stdout": tool_stdout,
+            "stderr": "",
+            "interrupted": False,
+            "isImage": False,
+        },
+    }
+    return subprocess.run(
+        [sys.executable, "-m", "delegate", "_hook-watch"],
+        input=json.dumps(hook_input),
+        capture_output=True,
+        text=True,
+        env={**workspace.env, "DELEGATE_WATCH_SEC": seconds},
+        cwd=cwd,
+    )
+
+
 def test_with_no_tasks_at_all_nothing_is_woken(workspace: Workspace) -> None:
     result = watch(workspace)
 
     assert result.returncode == QUIET
     assert json.loads(result.stdout)["ready"] == []
+
+
+def test_the_hook_watches_the_root_returned_by_cross_repo_submit(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    handle = workspace.submit()
+
+    result = hook_watch(workspace, json.dumps(handle), cwd=tmp_path, seconds="20")
+
+    assert result.returncode == WAKE
+    ready = json.loads(result.stdout)["ready"]
+    assert ready[0]["task_id"] == handle["task_id"]
+    assert ready[0]["project_root"] == str(workspace.repo)
+
+
+def test_the_hook_ignores_a_bash_result_that_is_not_a_delegate_handle(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    result = hook_watch(workspace, "ordinary command output", cwd=tmp_path)
+
+    assert result.returncode == QUIET
+    assert json.loads(result.stdout)["ready"] == []
+
+
+def test_each_submitted_task_keeps_its_own_completion_watcher(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    workspace.mode("silent_hang")
+    first = workspace.submit(title="first")
+    first_input = json.dumps(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_response": {"stdout": json.dumps(first)},
+        }
+    )
+    first_hook = subprocess.Popen(
+        [sys.executable, "-m", "delegate", "_hook-watch"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**workspace.env, "DELEGATE_WATCH_SEC": "20"},
+        cwd=tmp_path,
+    )
+    assert first_hook.stdin is not None
+    first_hook.stdin.write(first_input)
+    first_hook.stdin.close()
+    deadline = time.monotonic() + 2
+    task_lock = workspace.repo / ".claude" / "logs" / "delegate" / first["task_id"] / "watch.lock"
+    while not liveness.worker_alive(task_lock) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert liveness.worker_alive(task_lock)
+    while not workspace.calls() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert workspace.calls()
+
+    workspace.mode("success")
+    second = workspace.submit(title="second")
+    second_result = hook_watch(workspace, json.dumps(second), cwd=tmp_path, seconds="20")
+
+    assert second_result.returncode == WAKE
+    assert json.loads(second_result.stdout)["ready"][0]["task_id"] == second["task_id"]
+
+    workspace.run("cancel", first["task_id"])
+    first_hook.wait(timeout=5)
+    assert first_hook.returncode == WAKE
+    assert first_hook.stdout is not None
+    first_ready = json.loads(first_hook.stdout.read())["ready"][0]
+    assert first_ready["task_id"] == first["task_id"]
+    assert first_ready["status"] == "cancelled"
 
 
 def test_a_task_still_running_does_not_wake_the_session(workspace: Workspace) -> None:
@@ -78,6 +178,7 @@ def test_a_vanished_worker_is_reconciled_and_wakes_the_session(workspace: Worksp
         json.dumps(
             {
                 "task_id": "vanished",
+                "project_root": str(workspace.repo),
                 "title": "t",
                 "role": "artifact-auditor",
                 "status": "starting",
@@ -116,6 +217,7 @@ def test_reconcile_reports_a_short_line_per_task_not_the_whole_state(
 
     assert set(reported) == {
         "task_id",
+        "project_root",
         "title",
         "role",
         "status",

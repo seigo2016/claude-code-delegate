@@ -53,6 +53,7 @@ def test_a_task_that_has_only_just_been_handed_over_is_not_declared_lost(
         json.dumps(
             {
                 "task_id": "just-handed-over",
+                "project_root": str(workspace.repo),
                 "title": "t",
                 "role": "artifact-auditor",
                 "status": "starting",
@@ -82,6 +83,7 @@ def test_a_worker_that_vanished_after_writing_a_result_is_degraded_not_orphaned(
         json.dumps(
             {
                 "task_id": "vanished",
+                "project_root": str(workspace.repo),
                 "title": "t",
                 "role": "artifact-auditor",
                 "status": "running",

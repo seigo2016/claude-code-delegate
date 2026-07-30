@@ -123,6 +123,7 @@ def _find_duplicate(root: Path, key: str) -> dict[str, Any] | None:
 def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str, Any]:
     return {
         "task_id": state["task_id"],
+        "project_root": state["project_root"],
         "status": state["status"],
         "role": state["role"],
         "worker": state["worker"],

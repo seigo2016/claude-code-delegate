@@ -138,15 +138,16 @@ something.
 | command | for |
 |---|---|
 | `delegate submit --role R --title T --packet P` | start a worker and get a handle |
-| `delegate collect <task-id>` | take delivery, once |
+| `delegate collect <task-id> --project-root ROOT` | take delivery, once |
 | `delegate status <task-id>` | explicit diagnosis, never a waiting loop |
 | `delegate cancel <task-id>` | stop a task that is wrong or runaway |
 | `delegate reconcile` | classify tasks whose worker is gone |
 | `delegate watch` | what the hook runs; waits for something to collect |
 
 `submit` takes `--worker <name>` to override the backend for one task. Every
-command takes `--project-root`, which the hooks pass because they run from the
-installed plugin rather than from the repository.
+command takes `--project-root`. The submit handle and completion notification
+carry the resolved root so cross-repository tasks are collected from the same
+ledger they were submitted to.
 
 ## What is and is not checked
 

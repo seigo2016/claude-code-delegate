@@ -33,6 +33,7 @@ def test_submitting_returns_a_handle_without_waiting(workspace: Workspace) -> No
     assert handle["task_id"]
     assert handle["status"] in {"queued", "starting", "running"}
     assert (handle["model"], handle["effort"], handle["worker"]) == ("terra", "high", "codex")
+    assert handle["project_root"] == str(workspace.repo)
     assert handle["next_action"] == "end_turn"
     assert handle["completion_delivery"] == "async_rewake"
 
