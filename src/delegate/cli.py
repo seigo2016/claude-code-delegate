@@ -167,25 +167,23 @@ def _still_starting(state: dict[str, Any]) -> bool:
     return (datetime.now().astimezone() - created).total_seconds() < STARTUP_GRACE_SEC
 
 
+def _reconcile_state(state: dict[str, Any]) -> dict[str, Any]:
+    task_dir = Path(state["task_dir"])
+    if (
+        state["status"] in events.TERMINAL_STATES
+        or liveness.worker_alive(Path(state["lock_path"]))
+        or _still_starting(state)
+    ):
+        return state
+    result_path = Path(state["result_path"])
+    if result_path.exists() and result_path.stat().st_size:
+        return events.emit(task_dir, "degraded", terminal_reason="worker_gone_with_result")
+    return events.emit(task_dir, "orphaned", terminal_reason="worker_gone")
+
+
 def cmd_reconcile(args: argparse.Namespace) -> int:
     project_root = _root(args.project_root)
-    reconciled = []
-    for state in _states(project_root):
-        task_dir = Path(state["task_dir"])
-        if (
-            state["status"] in events.TERMINAL_STATES
-            or liveness.worker_alive(Path(state["lock_path"]))
-            or _still_starting(state)
-        ):
-            reconciled.append(state)
-            continue
-        result_path = Path(state["result_path"])
-        if result_path.exists() and result_path.stat().st_size:
-            reconciled.append(
-                events.emit(task_dir, "degraded", terminal_reason="worker_gone_with_result")
-            )
-        else:
-            reconciled.append(events.emit(task_dir, "orphaned", terminal_reason="worker_gone"))
+    reconciled = [_reconcile_state(state) for state in _states(project_root)]
     _print({"tasks": [_line(state) for state in reconciled]})
     return 0
 
@@ -218,7 +216,7 @@ def _wait_for_something_to_collect(project_root: Path) -> int:
     limit = float(os.environ.get("DELEGATE_WATCH_SEC", "3600"))
     deadline = time.monotonic() + limit
     while True:
-        states = _states(project_root)
+        states = [_reconcile_state(state) for state in _states(project_root)]
         ready = [
             state
             for state in states

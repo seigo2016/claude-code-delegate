@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from datetime import datetime, timedelta
 
 from conftest import Workspace
 from delegate import liveness
@@ -68,6 +69,32 @@ def test_a_failure_wakes_the_session_just_as_a_success_does(workspace: Workspace
 
     assert result.returncode == WAKE
     assert json.loads(result.stdout)["ready"][0]["status"] == "failed"
+
+
+def test_a_vanished_worker_is_reconciled_and_wakes_the_session(workspace: Workspace) -> None:
+    task_dir = workspace.repo / ".claude" / "logs" / "delegate" / "vanished"
+    task_dir.mkdir(parents=True)
+    (task_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "task_id": "vanished",
+                "title": "t",
+                "role": "artifact-auditor",
+                "status": "starting",
+                "created_at": (datetime.now().astimezone() - timedelta(minutes=1)).isoformat(),
+                "task_dir": str(task_dir),
+                "lock_path": str(task_dir / "worker.lock"),
+                "result_path": str(task_dir / "result.json"),
+                "delivered_at": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = watch(workspace)
+
+    assert result.returncode == WAKE
+    assert json.loads(result.stdout)["ready"][0]["status"] == "orphaned"
 
 
 def test_an_already_collected_task_does_not_wake_the_session_again(workspace: Workspace) -> None:
