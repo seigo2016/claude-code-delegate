@@ -29,3 +29,5 @@ def test_the_prompt_states_the_result_shape_because_most_backends_cannot_be_hand
 
     for field in envelope.FIELDS:
         assert field in prompt
+    assert "hard validity constraint" in prompt
+    assert "within 240 characters" in prompt

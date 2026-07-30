@@ -93,6 +93,10 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         f"{envelope.MAX_ITEM_CHARS} characters or fewer. If the answer needs more than "
         "that, write it to a file you were allowed to write and return its path."
     )
+    lines.append(
+        "This is a hard validity constraint: one overlong string fails the whole task. "
+        "Keep each string within 240 characters so counting differences cannot cross the limit."
+    )
     lines.append("Cite exact paths. Do not paste raw logs.")
     return "\n".join(lines) + "\n"
 
@@ -125,6 +129,8 @@ def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str,
         "model": state["model"],
         "effort": state["effort"],
         "deduplicated": deduplicated,
+        "next_action": "end_turn",
+        "completion_delivery": "async_rewake",
     }
 
 

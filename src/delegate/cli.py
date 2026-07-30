@@ -80,7 +80,13 @@ def cmd_collect(args: argparse.Namespace) -> int:
     except (OSError, ValueError, json.JSONDecodeError) as error:
         return _fail(f"task_not_found: {error}")
     if state["status"] not in events.TERMINAL_STATES:
-        return _fail("task_not_terminal", 4, status=state["status"])
+        return _fail(
+            "task_not_terminal",
+            4,
+            status=state["status"],
+            next_action="end_turn",
+            completion_delivery="async_rewake",
+        )
     if state.get("delivered_at"):
         return _fail("already_delivered", 3, delivered_at=state["delivered_at"])
 

@@ -33,6 +33,8 @@ def test_submitting_returns_a_handle_without_waiting(workspace: Workspace) -> No
     assert handle["task_id"]
     assert handle["status"] in {"queued", "starting", "running"}
     assert (handle["model"], handle["effort"], handle["worker"]) == ("terra", "high", "codex")
+    assert handle["next_action"] == "end_turn"
+    assert handle["completion_delivery"] == "async_rewake"
 
     workspace.run("cancel", handle["task_id"])
 
@@ -69,6 +71,8 @@ def test_a_task_still_running_cannot_be_collected(workspace: Workspace) -> None:
     refusal = workspace.run("collect", handle["task_id"], expect_success=False)
 
     assert refusal["error"] == "task_not_terminal"
+    assert refusal["next_action"] == "end_turn"
+    assert refusal["completion_delivery"] == "async_rewake"
     workspace.run("cancel", handle["task_id"])
 
 

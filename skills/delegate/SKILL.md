@@ -68,11 +68,13 @@ The scope is checked, not merely requested: the repository is compared before an
 
 ## 3. Stop
 
-`submit` returns a handle immediately. Record the `task_id`, dispatch anything else that is ready, and end your turn. A hook wakes this session when the task finishes.
+`submit` returns a handle immediately with `next_action: end_turn` and `completion_delivery: async_rewake`. Record the `task_id`, dispatch anything else that is already ready, and end your turn.
 
-Do not call `status` to see how it is going. Waiting costs the context you delegated to save.
+Do not call `collect` in the same turn as `submit`, not even once. Do not call `status` to see how it is going. If another user turn arrives before the completion notification, continue only independent work and leave this task alone. Waiting costs the context you delegated to save.
 
 ## 4. Collect once
+
+After the asynchronous completion notification, collect exactly once:
 
 ```bash
 delegate collect <task-id>
