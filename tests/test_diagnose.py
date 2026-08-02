@@ -31,15 +31,16 @@ def test_file_changes_accumulate_without_duplicates() -> None:
 
 
 def test_a_tool_write_is_counted_only_after_successful_completion() -> None:
-    started = NormalizedEvent(
-        kind="item_started", item_id="write-1", changed_paths=("one.txt",)
-    )
+    started = NormalizedEvent(kind="item_started", item_id="write-1", changed_paths=("one.txt",))
 
     assert fold(started).changed_paths == ()
-    assert fold(
-        started,
-        NormalizedEvent(kind="item_completed", item_id="write-1", succeeded=False),
-    ).changed_paths == ()
+    assert (
+        fold(
+            started,
+            NormalizedEvent(kind="item_completed", item_id="write-1", succeeded=False),
+        ).changed_paths
+        == ()
+    )
     assert fold(
         started,
         NormalizedEvent(kind="item_completed", item_id="write-1", succeeded=True),

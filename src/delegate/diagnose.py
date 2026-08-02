@@ -52,13 +52,16 @@ def observe(view: RunView, event: NormalizedEvent) -> RunView:
         return replace(view, turn_completed=True)
     if event.kind == "runtime_warning":
         return replace(view, runtime_warnings=view.runtime_warnings + 1)
-    if event.kind == "item_started" and event.item_id and event.item_type:
+    if event.kind == "item_started" and event.item_id:
         pending = view.pending_changes
         if event.changed_paths:
             pending = (*pending, (event.item_id, event.changed_paths))
+        open_items = view.open_items
+        if event.item_type:
+            open_items = (*open_items, (event.item_id, event.item_type))
         return replace(
             view,
-            open_items=(*view.open_items, (event.item_id, event.item_type)),
+            open_items=open_items,
             pending_changes=pending,
         )
     if event.kind == "item_completed":
@@ -69,9 +72,7 @@ def observe(view: RunView, event: NormalizedEvent) -> RunView:
             if item_id == event.item_id
             for path in paths
         )
-        pending_changes = tuple(
-            item for item in view.pending_changes if item[0] != event.item_id
-        )
+        pending_changes = tuple(item for item in view.pending_changes if item[0] != event.item_id)
         changed_paths = view.changed_paths
         if event.succeeded is not False:
             changed_paths = tuple(dict.fromkeys((*changed_paths, *pending_paths)))
