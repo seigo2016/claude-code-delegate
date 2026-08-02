@@ -26,6 +26,8 @@ class NormalizedEvent:
     item_type: str | None = None
     text: str | None = None
     session_id: str | None = None
+    changed_paths: tuple[str, ...] = ()
+    succeeded: bool | None = None
 
 
 class WorkerAdapter(Protocol):

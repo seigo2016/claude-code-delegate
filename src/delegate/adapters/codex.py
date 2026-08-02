@@ -103,12 +103,23 @@ class CodexAdapter:
             if not isinstance(item, dict):
                 return []
             text = item.get("text")
+            changes = item.get("changes")
+            changed_paths = (
+                tuple(
+                    change["path"]
+                    for change in changes
+                    if isinstance(change, dict) and isinstance(change.get("path"), str)
+                )
+                if isinstance(changes, list)
+                else ()
+            )
             return [
                 NormalizedEvent(
                     kind="item_started" if kind == "item.started" else "item_completed",
                     item_id=item.get("id") if isinstance(item.get("id"), str) else None,
                     item_type=item.get("type") if isinstance(item.get("type"), str) else None,
                     text=text if isinstance(text, str) else None,
+                    changed_paths=changed_paths,
                 )
             ]
         return []

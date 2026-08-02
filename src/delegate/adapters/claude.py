@@ -122,11 +122,18 @@ def _tool_events(event: dict[str, Any], kind: str) -> list[NormalizedEvent]:
         if not isinstance(block, dict):
             continue
         if kind == "assistant" and block.get("type") == "tool_use":
+            name = block.get("name")
+            inputs = block.get("input")
+            path = None
+            if name in {"Edit", "Write", "NotebookEdit"} and isinstance(inputs, dict):
+                candidate = inputs.get("file_path") or inputs.get("path")
+                path = candidate if isinstance(candidate, str) else None
             found.append(
                 NormalizedEvent(
                     kind="item_started",
                     item_id=block.get("id") if isinstance(block.get("id"), str) else None,
                     item_type=block.get("name") if isinstance(block.get("name"), str) else "tool",
+                    changed_paths=(path,) if path else (),
                 )
             )
         elif kind == "user" and block.get("type") == "tool_result":
@@ -137,6 +144,7 @@ def _tool_events(event: dict[str, Any], kind: str) -> list[NormalizedEvent]:
                     if isinstance(block.get("tool_use_id"), str)
                     else None,
                     item_type="tool",
+                    succeeded=not bool(block.get("is_error")),
                 )
             )
     return found

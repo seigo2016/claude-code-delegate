@@ -83,11 +83,23 @@ class OpenCodeAdapter:
         if kind == "tool_use":
             state = part.get("state")
             status = state.get("status") if isinstance(state, dict) else None
+            tool = part.get("tool")
+            inputs = state.get("input") if isinstance(state, dict) else None
+            path = None
+            if (
+                status == "completed"
+                and tool in {"write", "edit", "patch", "apply_patch"}
+                and isinstance(inputs, dict)
+            ):
+                candidate = inputs.get("filePath") or inputs.get("file_path") or inputs.get("path")
+                path = candidate if isinstance(candidate, str) else None
             return [
                 NormalizedEvent(
                     kind="item_started" if status in UNFINISHED else "item_completed",
                     item_id=part.get("id") if isinstance(part.get("id"), str) else None,
                     item_type=part.get("tool") if isinstance(part.get("tool"), str) else "tool",
+                    changed_paths=(path,) if path else (),
+                    succeeded=status == "completed" if status not in UNFINISHED else None,
                 )
             ]
         return []

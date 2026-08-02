@@ -193,18 +193,32 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             "duration_sec": round(time.monotonic() - started, 3),
             **_snapshot(view),
         }
-        fields.update(_write_scope(project_root, before, task_dir))
+        fields.update(_write_scope(project_root, before, task_dir, view))
         _finish(task_dir, state, view, fields, cancelled=cancelled, timed_out=timed_out)
 
 
-def _write_scope(project_root: Path, before: set[str] | None, task_dir: Path) -> dict[str, Any]:
+def _write_scope(
+    project_root: Path,
+    before: set[str] | None,
+    task_dir: Path,
+    view: diagnose.RunView,
+) -> dict[str, Any]:
     allowed = store.read_json(task_dir / "packet.json")["allowed_writes"]
     after = workspace.changed_paths(project_root) if before is not None else None
     if before is None or after is None:
-        return {"write_scope_checked": False, "unauthorized_writes": []}
+        return {
+            "write_scope_checked": False,
+            "unauthorized_writes": [],
+            "unattributed_workspace_changes": [],
+        }
+    worker_changes = workspace.relative_paths(project_root, view.changed_paths)
+    workspace_changes = after - before
+    worker_changes &= workspace_changes
+    unattributed = workspace_changes - worker_changes
     return {
-        "write_scope_checked": True,
-        "unauthorized_writes": workspace.unauthorized(before, after, allowed),
+        "write_scope_checked": not unattributed,
+        "unauthorized_writes": workspace.unauthorized(set(), worker_changes, allowed),
+        "unattributed_workspace_changes": sorted(unattributed),
     }
 
 

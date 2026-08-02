@@ -27,7 +27,7 @@ a result. None of those comes back as success.
 
 ```bash
 claude plugin marketplace add seigo2016/claude-code-delegate
-claude plugin install delegate@claude-code-delegate --scope project
+claude plugin install delegate@claude-code-delegate --scope user
 ```
 
 Then write `.claude/delegate.toml` in your project, naming one backend you have:
@@ -156,12 +156,16 @@ Detected:
 - a worker that never started, stalled, died, or lost its supervisor
 - a result that is absent, malformed, or missing required fields
 - a final message that never became a delivered result
-- writes outside the declared scope, within the git work tree
+- writes outside the declared scope when the worker backend reports the changed path
+- work-tree paths that became dirty during the run but cannot be attributed to that worker
 
 Not detected:
 
 - writes outside the work tree: a home directory, a system path
 - writes to files `.gitignore` excludes
+- the author of an unreported work-tree change; these are recorded as
+  `unattributed_workspace_changes`, do not fail the task, and set
+  `write_scope_checked` to `false`
 - network effects, credential access, or anything git does not represent
 - a result that satisfies the contract and is still wrong
 

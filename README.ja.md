@@ -21,7 +21,7 @@ worker は止まることも、死ぬことも、何も返さないことも、�
 
 ```bash
 claude plugin marketplace add seigo2016/claude-code-delegate
-claude plugin install delegate@claude-code-delegate --scope project
+claude plugin install delegate@claude-code-delegate --scope user
 ```
 
 続けて、自分の project に `.claude/delegate.toml` を置き、手元にある backend を 1 つ書きます。
@@ -89,7 +89,8 @@ task は Claude が組み立てます。何をするか、何を読んでよい�
 | 非ゼロ終了 | `failed` / `nonzero_exit` |
 | 結果を出力しない | `failed` / `empty_result` |
 | 形式を満たさない結果 | `failed` / `invalid_result` と、その理由 |
-| 宣言した範囲の外へ書き込んだ | `failed` / `write_scope_violation` と、その path |
+| worker backend が報告した変更先が宣言範囲外だった | `failed` / `write_scope_violation` と、その path |
+| 実行中に dirty になったがworkerへ帰属できないpathがある | task結果は保持し、`unattributed_workspace_changes`へ記録 |
 | backend を起動できない | `failed` / `launch_error` |
 | こちらが取り消した | `cancelled` |
 | 実行中に機械が落ちた | `orphaned`。結果が残っていれば `degraded` |

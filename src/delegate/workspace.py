@@ -1,12 +1,12 @@
 """What changed in the repository while a worker ran.
 
-A declared write scope is only a request until someone compares it with what
-happened. Git is what we have to compare with; without it we say so rather than
-implying a check took place.
+Worker events can attribute explicit file edits. Git can only show that the
+shared work tree changed, not which concurrent process changed it.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -42,3 +42,17 @@ def unauthorized(before: set[str], after: set[str], allowed: list[str]) -> list[
         for path in after - before
         if not any(path == entry or path.startswith(entry.rstrip("/") + "/") for entry in allowed)
     )
+
+
+def relative_paths(project_root: Path, paths: tuple[str, ...]) -> set[str]:
+    """Worker-reported paths that are inside the work tree, made relative to it."""
+    root = Path(os.path.abspath(project_root))
+    relative = set()
+    for raw in paths:
+        path = Path(raw)
+        candidate = path if path.is_absolute() else root / path
+        try:
+            relative.add(Path(os.path.abspath(candidate)).relative_to(root).as_posix())
+        except ValueError:
+            continue
+    return relative

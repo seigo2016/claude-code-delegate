@@ -21,6 +21,31 @@ def fold(*events: NormalizedEvent) -> diagnose.RunView:
     return view
 
 
+def test_file_changes_accumulate_without_duplicates() -> None:
+    view = fold(
+        NormalizedEvent(kind="item_completed", changed_paths=("one.txt", "two.txt")),
+        NormalizedEvent(kind="item_completed", changed_paths=("two.txt",)),
+    )
+
+    assert view.changed_paths == ("one.txt", "two.txt")
+
+
+def test_a_tool_write_is_counted_only_after_successful_completion() -> None:
+    started = NormalizedEvent(
+        kind="item_started", item_id="write-1", changed_paths=("one.txt",)
+    )
+
+    assert fold(started).changed_paths == ()
+    assert fold(
+        started,
+        NormalizedEvent(kind="item_completed", item_id="write-1", succeeded=False),
+    ).changed_paths == ()
+    assert fold(
+        started,
+        NormalizedEvent(kind="item_completed", item_id="write-1", succeeded=True),
+    ).changed_paths == ("one.txt",)
+
+
 def test_nothing_observed_at_all_is_a_wall_clock_timeout() -> None:
     assert diagnose.classify_timeout(fold()) == "wall_clock_timeout"
 

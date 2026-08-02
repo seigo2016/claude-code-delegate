@@ -34,10 +34,17 @@ class RunView:
     turn_completed: bool = False
     last_agent_message: str | None = None
     runtime_warnings: int = 0
+    changed_paths: tuple[str, ...] = ()
+    pending_changes: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 def observe(view: RunView, event: NormalizedEvent) -> RunView:
     view = replace(view, event_count=view.event_count + 1)
+    if event.changed_paths and event.kind != "item_started":
+        view = replace(
+            view,
+            changed_paths=tuple(dict.fromkeys((*view.changed_paths, *event.changed_paths))),
+        )
 
     if event.kind == "session_started":
         return replace(view, session_id=event.session_id or view.session_id)
@@ -46,12 +53,42 @@ def observe(view: RunView, event: NormalizedEvent) -> RunView:
     if event.kind == "runtime_warning":
         return replace(view, runtime_warnings=view.runtime_warnings + 1)
     if event.kind == "item_started" and event.item_id and event.item_type:
-        return replace(view, open_items=(*view.open_items, (event.item_id, event.item_type)))
+        pending = view.pending_changes
+        if event.changed_paths:
+            pending = (*pending, (event.item_id, event.changed_paths))
+        return replace(
+            view,
+            open_items=(*view.open_items, (event.item_id, event.item_type)),
+            pending_changes=pending,
+        )
     if event.kind == "item_completed":
         open_items = tuple(item for item in view.open_items if item[0] != event.item_id)
+        pending_paths = tuple(
+            path
+            for item_id, paths in view.pending_changes
+            if item_id == event.item_id
+            for path in paths
+        )
+        pending_changes = tuple(
+            item for item in view.pending_changes if item[0] != event.item_id
+        )
+        changed_paths = view.changed_paths
+        if event.succeeded is not False:
+            changed_paths = tuple(dict.fromkeys((*changed_paths, *pending_paths)))
         if event.item_type == "agent_message" and event.text is not None:
-            return replace(view, open_items=open_items, last_agent_message=event.text)
-        return replace(view, open_items=open_items)
+            return replace(
+                view,
+                open_items=open_items,
+                pending_changes=pending_changes,
+                changed_paths=changed_paths,
+                last_agent_message=event.text,
+            )
+        return replace(
+            view,
+            open_items=open_items,
+            pending_changes=pending_changes,
+            changed_paths=changed_paths,
+        )
     return view
 
 

@@ -254,3 +254,83 @@ def test_a_run_that_was_refused_things_says_so(sample: Sample) -> None:
         "permission_denied",
         "permission_denied",
     ]
+
+
+@pytest.mark.parametrize(
+    ("adapter", "line"),
+    [
+        (
+            codex.CodexAdapter(),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "i-3",
+                        "type": "file_change",
+                        "changes": [{"path": "/repo/changed.txt", "kind": "update"}],
+                    },
+                }
+            ),
+        ),
+        (
+            opencode.OpenCodeAdapter(),
+            json.dumps(
+                {
+                    "type": "tool_use",
+                    "part": {
+                        "id": "p-3",
+                        "tool": "write",
+                        "state": {
+                            "status": "completed",
+                            "input": {"filePath": "/repo/changed.txt"},
+                        },
+                    },
+                }
+            ),
+        ),
+        (
+            claude.ClaudeAdapter(),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "t-3",
+                                "name": "Write",
+                                "input": {"file_path": "/repo/changed.txt"},
+                            }
+                        ]
+                    },
+                }
+            ),
+        ),
+    ],
+    ids=("codex", "opencode", "claude"),
+)
+def test_an_explicit_file_change_carries_its_path(adapter: WorkerAdapter, line: str) -> None:
+    events = adapter.parse_events(line)
+
+    assert [path for event in events for path in event.changed_paths] == ["/repo/changed.txt"]
+
+
+def test_claude_reports_whether_a_tool_completed_successfully() -> None:
+    line = json.dumps(
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t-3",
+                        "is_error": True,
+                    }
+                ]
+            },
+        }
+    )
+
+    (event,) = claude.ClaudeAdapter().parse_events(line)
+
+    assert event.succeeded is False

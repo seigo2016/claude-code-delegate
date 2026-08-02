@@ -65,6 +65,12 @@ if mode == "tool_hang":
 if mode == "silent_hang":
     time.sleep(60)
 
+if mode == "wait_for_foreign_change":
+    foreign = pathlib.Path(os.environ["FAKE_CWD"]) / "foreign.txt"
+    deadline = time.monotonic() + 5
+    while not foreign.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
 good = {
     "status": "completed",
     "observed_facts": ["the fake worker ran"],
@@ -102,10 +108,16 @@ if mode == "result_in_message_only":
     sys.exit(0)
 
 if mode == "writes_allowed":
-    (pathlib.Path(os.environ["FAKE_CWD"]) / "allowed.txt").write_text("ok")
+    changed = pathlib.Path(os.environ["FAKE_CWD"]) / "allowed.txt"
+    changed.write_text("ok")
+    event({"type": "item.completed", "item": {"id": "i-write", "type": "file_change",
+           "changes": [{"path": str(changed), "kind": "add"}]}})
 
 if mode == "writes_elsewhere":
-    (pathlib.Path(os.environ["FAKE_CWD"]) / "unauthorized.txt").write_text("oops")
+    changed = pathlib.Path(os.environ["FAKE_CWD"]) / "unauthorized.txt"
+    changed.write_text("oops")
+    event({"type": "item.completed", "item": {"id": "i-write", "type": "file_change",
+           "changes": [{"path": str(changed), "kind": "add"}]}})
 
 if mode == "decision_needed":
     good = {**good, "status": "decision_needed", "decision_needed": "pick a threshold"}
