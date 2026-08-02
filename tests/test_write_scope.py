@@ -68,6 +68,17 @@ def test_writing_outside_the_declared_scope_is_a_failure(workspace: Workspace) -
     assert state["unauthorized_writes"] == ["unauthorized.txt"]
 
 
+def test_reported_write_to_an_already_dirty_path_is_still_checked(workspace: Workspace) -> None:
+    (workspace.repo / "unauthorized.txt").write_text("dirty before worker")
+    workspace.mode("writes_elsewhere")
+
+    handle = workspace.submit(packet=SCOPED, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+
+    assert state["status"] == "failed"
+    assert state["unauthorized_writes"] == ["unauthorized.txt"]
+
+
 def test_a_concurrent_workspace_change_is_not_attributed_to_the_worker(
     workspace: Workspace,
 ) -> None:

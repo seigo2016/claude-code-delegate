@@ -306,8 +306,26 @@ def test_a_run_that_was_refused_things_says_so(sample: Sample) -> None:
                 }
             ),
         ),
+        (
+            claude.ClaudeAdapter(),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "t-4",
+                                "name": "NotebookEdit",
+                                "input": {"notebook_path": "/repo/changed.txt"},
+                            }
+                        ]
+                    },
+                }
+            ),
+        ),
     ],
-    ids=("codex", "opencode", "claude"),
+    ids=("codex", "opencode", "claude", "claude-notebook"),
 )
 def test_an_explicit_file_change_carries_its_path(adapter: WorkerAdapter, line: str) -> None:
     events = adapter.parse_events(line)

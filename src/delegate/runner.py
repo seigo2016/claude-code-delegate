@@ -213,7 +213,6 @@ def _write_scope(
         }
     worker_changes = workspace.relative_paths(project_root, view.changed_paths)
     workspace_changes = after - before
-    worker_changes &= workspace_changes
     unattributed = workspace_changes - worker_changes
     return {
         "write_scope_checked": not unattributed,

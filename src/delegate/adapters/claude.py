@@ -126,7 +126,9 @@ def _tool_events(event: dict[str, Any], kind: str) -> list[NormalizedEvent]:
             inputs = block.get("input")
             path = None
             if name in {"Edit", "Write", "NotebookEdit"} and isinstance(inputs, dict):
-                candidate = inputs.get("file_path") or inputs.get("path")
+                candidate = (
+                    inputs.get("file_path") or inputs.get("notebook_path") or inputs.get("path")
+                )
                 path = candidate if isinstance(candidate, str) else None
             found.append(
                 NormalizedEvent(
