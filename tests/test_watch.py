@@ -114,6 +114,52 @@ def test_the_hook_accepts_a_handle_before_other_bash_output(
     assert json.loads(result.stdout)["ready"][0]["task_id"] == handle["task_id"]
 
 
+def test_the_hook_watches_every_handle_from_one_bash_result(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    workspace.mode("silent_hang")
+    first = workspace.submit(title="first")
+    deadline = time.monotonic() + 2
+    while workspace.run("status", first["task_id"])["status"] != "running":
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    while not workspace.calls():
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    workspace.mode("success")
+    second = workspace.submit(title="second")
+
+    result = hook_watch(
+        workspace,
+        f"{json.dumps(first)}\n{json.dumps(second)}",
+        cwd=tmp_path,
+        seconds="20",
+    )
+
+    assert result.returncode == WAKE
+    assert json.loads(result.stdout)["ready"][0]["task_id"] == second["task_id"]
+    workspace.run("cancel", first["task_id"])
+
+
+def test_collect_rearms_the_remaining_tasks_from_one_bash_result(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    first = workspace.submit(title="first")
+    second = workspace.submit(title="second")
+    hook_watch(
+        workspace,
+        f"{json.dumps(first)}\n{json.dumps(second)}",
+        cwd=tmp_path,
+        seconds="20",
+    )
+
+    collected = workspace.run("collect", first["task_id"])
+    result = hook_watch(workspace, json.dumps(collected), cwd=tmp_path, seconds="20")
+
+    assert result.returncode == WAKE
+    assert json.loads(result.stdout)["ready"][0]["task_id"] == second["task_id"]
+
+
 def test_the_hook_ignores_json_that_does_not_name_a_task(
     workspace: Workspace, tmp_path: Path
 ) -> None:

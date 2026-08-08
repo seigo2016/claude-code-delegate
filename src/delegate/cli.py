@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import time
+from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
@@ -93,33 +94,36 @@ def cmd_collect(args: argparse.Namespace) -> int:
     result: Any = None
     if state["status"] in {"completed", "decision_needed"}:
         result = store.read_json(Path(state["result_path"]))
-    _print(
-        {
-            "task_id": state["task_id"],
-            "status": state["status"],
-            "role": state["role"],
-            "worker": state["worker"],
-            "model": state["model"],
-            "effort": state["effort"],
-            "duration_sec": state.get("duration_sec"),
-            "session_id": state.get("session_id"),
-            "terminal_reason": state.get("terminal_reason"),
-            "failure_class": state.get("failure_class"),
-            "recovery_status": state.get("recovery_status"),
-            "result": result,
-            "artifacts": {
-                "packet": state["packet_path"],
-                "prompt": state["prompt_path"],
-                "result": state["result_path"],
-                "events": state["events_path"],
-                "stderr": state["stderr_path"],
-                "state": state["state_path"],
-                "last_agent_message": state.get("last_agent_message_path"),
-                "recovered_result": state.get("recovered_result_path"),
-            },
-        }
-    )
-    events.emit(task_dir, state["status"], delivered_at=events.now_iso())
+    state = events.emit(task_dir, state["status"], delivered_at=events.now_iso())
+    delivery = {
+        "task_id": state["task_id"],
+        "status": state["status"],
+        "role": state["role"],
+        "worker": state["worker"],
+        "model": state["model"],
+        "effort": state["effort"],
+        "duration_sec": state.get("duration_sec"),
+        "session_id": state.get("session_id"),
+        "terminal_reason": state.get("terminal_reason"),
+        "failure_class": state.get("failure_class"),
+        "recovery_status": state.get("recovery_status"),
+        "result": result,
+        "artifacts": {
+            "packet": state["packet_path"],
+            "prompt": state["prompt_path"],
+            "result": state["result_path"],
+            "events": state["events_path"],
+            "stderr": state["stderr_path"],
+            "state": state["state_path"],
+            "last_agent_message": state.get("last_agent_message_path"),
+            "recovered_result": state.get("recovered_result_path"),
+        },
+    }
+    remaining = _remaining_watch_tasks(task_dir, state["task_id"])
+    if remaining:
+        delivery["completion_delivery"] = "async_rewake"
+        delivery["watch_tasks"] = remaining
+    _print(delivery)
     return 0
 
 
@@ -196,23 +200,31 @@ WAKE = 2
 QUIET = 0
 
 
-def _handle_from_stdout(stdout: str) -> dict[str, Any]:
+def _handles_from_stdout(stdout: str) -> list[dict[str, Any]]:
     handles = []
+    seen = set()
     for line in stdout.splitlines():
         try:
             value = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if (
-            isinstance(value, dict)
-            and value.get("completion_delivery") == "async_rewake"
-            and isinstance(value.get("project_root"), str)
-            and isinstance(value.get("task_id"), str)
-        ):
-            handles.append(value)
-    if len(handles) != 1:
-        raise ValueError("expected one delegate handle")
-    return handles[0]
+        if not isinstance(value, dict) or value.get("completion_delivery") != "async_rewake":
+            continue
+        candidates = [value, *value.get("watch_tasks", [])]
+        for candidate in candidates:
+            if not (
+                isinstance(candidate, dict)
+                and isinstance(candidate.get("project_root"), str)
+                and isinstance(candidate.get("task_id"), str)
+            ):
+                continue
+            identity = (candidate["project_root"], candidate["task_id"])
+            if identity not in seen:
+                handles.append(candidate)
+                seen.add(identity)
+    if not handles:
+        raise ValueError("expected at least one delegate handle")
+    return handles
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
@@ -229,22 +241,62 @@ def cmd_hook_watch(args: argparse.Namespace) -> int:
     try:
         hook_input = json.load(sys.stdin)
         stdout = hook_input["tool_response"]["stdout"]
-        handle = _handle_from_stdout(stdout)
-        project_root = _root(handle["project_root"])
-        _, state = _load_task(project_root, handle["task_id"])
+        handles = _handles_from_stdout(stdout)
+        watched = []
+        for handle in handles:
+            project_root = _root(handle["project_root"])
+            _, state = _load_task(project_root, handle["task_id"])
+            if (
+                state.get("project_root") != str(project_root)
+                or state.get("task_id") != handle["task_id"]
+            ):
+                raise ValueError("task handle does not match task state")
+            watched.append((project_root, state["task_id"]))
     except (KeyError, TypeError, OSError, ValueError, json.JSONDecodeError):
         _print({"ready": []})
         return QUIET
-    if (
-        hook_input.get("hook_event_name") != "PostToolUse"
-        or hook_input.get("tool_name") != "Bash"
-        or handle.get("completion_delivery") != "async_rewake"
-        or state.get("project_root") != str(project_root)
-        or state.get("task_id") != handle.get("task_id")
-    ):
+    if hook_input.get("hook_event_name") != "PostToolUse" or hook_input.get("tool_name") != "Bash":
         _print({"ready": []})
         return QUIET
-    return _watch_task(project_root, state["task_id"])
+    _remember_watch_group(watched)
+    return _watch_tasks(watched)
+
+
+def _remember_watch_group(watched: list[tuple[Path, str]]) -> None:
+    group = {
+        "watch_tasks": [
+            {"project_root": str(project_root), "task_id": task_id}
+            for project_root, task_id in watched
+        ]
+    }
+    for project_root, task_id in watched:
+        store.write_json(tasks.task_root(project_root) / task_id / "watch-group.json", group)
+
+
+def _remaining_watch_tasks(task_dir: Path, collected_task_id: str) -> list[dict[str, str]]:
+    try:
+        group = store.read_json(task_dir / "watch-group.json")["watch_tasks"]
+    except (KeyError, OSError, ValueError, json.JSONDecodeError):
+        return []
+    remaining = []
+    for entry in group:
+        if not isinstance(entry, dict):
+            continue
+        project_root = entry.get("project_root")
+        task_id = entry.get("task_id")
+        if (
+            not isinstance(project_root, str)
+            or not isinstance(task_id, str)
+            or task_id == collected_task_id
+        ):
+            continue
+        try:
+            _, state = _load_task(_root(project_root), task_id)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if not state.get("delivered_at"):
+            remaining.append({"project_root": project_root, "task_id": task_id})
+    return remaining
 
 
 def _watch(project_root: Path) -> int:
@@ -258,29 +310,52 @@ def _watch(project_root: Path) -> int:
 
 
 def _watch_task(project_root: Path, task_id: str) -> int:
-    task_dir = tasks.task_root(project_root) / task_id
-    try:
-        with liveness.hold(task_dir / "watch.lock"):
-            return _wait_for_task(project_root, task_id)
-    except liveness.AlreadyHeld:
-        _print({"ready": []})
-        return QUIET
+    return _watch_tasks([(project_root, task_id)])
+
+
+def _watch_tasks(watched: list[tuple[Path, str]]) -> int:
+    with ExitStack() as locks:
+        accepted = []
+        for project_root, task_id in watched:
+            task_dir = tasks.task_root(project_root) / task_id
+            try:
+                locks.enter_context(liveness.hold(task_dir / "watch.lock"))
+            except liveness.AlreadyHeld:
+                continue
+            accepted.append((project_root, task_id))
+        if not accepted:
+            _print({"ready": []})
+            return QUIET
+        return _wait_for_tasks(accepted)
 
 
 def _wait_for_task(project_root: Path, task_id: str) -> int:
+    return _wait_for_tasks([(project_root, task_id)])
+
+
+def _wait_for_tasks(watched: list[tuple[Path, str]]) -> int:
     limit = float(os.environ.get("DELEGATE_WATCH_SEC", "3600"))
     deadline = time.monotonic() + limit
     while True:
-        try:
-            _, state = _load_task(project_root, task_id)
-        except (OSError, ValueError, json.JSONDecodeError):
-            _print({"ready": []})
-            return QUIET
-        state = _reconcile_state(state)
-        if state["status"] in events.TERMINAL_STATES and not state.get("delivered_at"):
-            _print({"ready": [_line(state)]})
+        states = []
+        for project_root, task_id in watched:
+            try:
+                _, state = _load_task(project_root, task_id)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            states.append(_reconcile_state(state))
+        ready = [
+            state
+            for state in states
+            if state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
+        ]
+        if ready:
+            _print({"ready": [_line(state) for state in ready]})
             return WAKE
-        if state["status"] not in events.ACTIVE_STATES or time.monotonic() >= deadline:
+        if (
+            not any(state["status"] in events.ACTIVE_STATES for state in states)
+            or time.monotonic() >= deadline
+        ):
             _print({"ready": []})
             return QUIET
         time.sleep(WATCH_POLL_SEC)

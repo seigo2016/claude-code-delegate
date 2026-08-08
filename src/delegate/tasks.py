@@ -78,6 +78,16 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     lines.extend(f"- {item}" for item in value["read"] or ["- nothing specified"])
     lines.append("You may write only:")
     lines.extend(f"- {item}" for item in value["allowed_writes"] or ["nothing"])
+    if value["allowed_writes"]:
+        lines.append(
+            "Write only to the canonical repository-relative paths listed above. "
+            "Do not write a similarly named file elsewhere."
+        )
+    else:
+        lines.append(
+            "This is a read-only task. Do not invoke write, edit, or patch tools; "
+            "do not create files in .claude, /tmp, or elsewhere."
+        )
     lines.append("Do not:")
     lines.extend(f"- {item}" for item in forbidden)
     lines.append("Bring back evidence for:")

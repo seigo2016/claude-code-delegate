@@ -118,7 +118,7 @@ skill と hook が実行します。人が直接使うのは診断のときだ�
 | `delegate reconcile` | worker が消えた task を分類する |
 | `delegate watch` | hook が実行する。回収できるものを待つ |
 
-`submit` は `--worker <name>` で backend を task ごとに上書きできます。全コマンドが `--project-root` を受け取ります。submit handle と完了通知にも正規化済みの root が含まれるため、cross-repository task は submit 時と同じ ledger から回収されます。
+`submit` は `--worker <name>` で backend を task ごとに上書きできます。全コマンドが `--project-root` を受け取ります。submit handle と完了通知にも正規化済みの root が含まれるため、cross-repository task は submit 時と同じ ledger から回収されます。1 回の Bash 呼び出しで複数の独立 task を submit しても、hook は返された全 handle を追跡します。1 件を collect した後は、同じ呼び出しの未回収 task に対して再び待機します。
 
 ## 検出の範囲
 
@@ -144,7 +144,7 @@ sandbox が事前に止められる範囲は backend で異なります。書き
 | claude | `auto` から編集ツールを外したもの | 分類器とツールの非付与 |
 | opencode | 実行ごとに指定する手段がない | prompt のみ |
 
-カーネルで拒否するのは codex だけです。書き込みを試みると `Read-only file system` が返りました。claude では編集ツールをそもそも渡さず、試した迂回 (シェルのリダイレクト、`tee`、Python の 1 行スクリプト) はいずれも分類器が拒みました。ただしこれは境界ではなく、その都度の判断です。opencode は権限フラグを一切渡さない状態でファイル書き込みとシェル実行を行うことを実測しており、この backend での読み取り専用は依頼にとどまります。
+カーネルで拒否するのは codex だけです。書き込みを試みると `Read-only file system` が返りました。claude では編集ツールをそもそも渡さず、試した迂回 (シェルのリダイレクト、`tee`、Python の 1 行スクリプト) はいずれも分類器が拒みました。ただしこれは境界ではなく、その都度の判断です。opencode は権限フラグを一切渡さない状態でファイル書き込みとシェル実行を行うことを実測しており、この backend での読み取り専用は依頼にとどまります。task contract は `.claude`、`/tmp`、その他への scratch file 作成も明示的に禁止しますが、OpenCode の依頼ベースの境界を sandbox に変えるものではありません。
 
 テストやビルドを走らせる role には、リポジトリを変更できない場合でも書き込み可能なファイルシステムを与えます。ビルドツールが home ディレクトリ配下にキャッシュを書くためです。この場合リポジトリへの書き込みを事前に止めるものはなく、上記の事後検査が検出します。
 

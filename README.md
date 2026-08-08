@@ -147,7 +147,9 @@ something.
 `submit` takes `--worker <name>` to override the backend for one task. Every
 command takes `--project-root`. The submit handle and completion notification
 carry the resolved root so cross-repository tasks are collected from the same
-ledger they were submitted to.
+ledger they were submitted to. One Bash call may submit several independent
+tasks: the hook tracks every returned handle. After collecting one, it re-arms
+itself for any still-uncollected task from that same call.
 
 ## What is and is not checked
 
@@ -183,7 +185,9 @@ system`. Claude Code is not handed the editing tools, and its classifier turned
 down every way round them that was tried: a shell redirect, `tee`, and a Python
 one-liner. That is a judgement made each time rather than a boundary. opencode was
 measured writing a file and running a shell command with no permission flag passed
-at all, so a read-only task on that backend is read-only by request.
+at all, so a read-only task on that backend is read-only by request. The task
+contract explicitly forbids scratch files in `.claude`, `/tmp`, and elsewhere;
+it does not make OpenCode's request-only boundary an enforced sandbox.
 
 A role that runs tests or builds gets a writable filesystem even when it may not
 change the repository, because build tools write caches under the home directory.
