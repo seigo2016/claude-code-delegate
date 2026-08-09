@@ -83,7 +83,7 @@ SAMPLES = {
                 },
             }
         ),
-        read_only_flags=None,
+        read_only_flags=("--agent", "claude-code-delegate-readonly"),
     ),
     "claude": Sample(
         adapter=claude.ClaudeAdapter(),
@@ -174,7 +174,7 @@ def build(
 def test_the_command_carries_the_model_and_the_effort(sample: Sample, tmp_path: Path) -> None:
     command = build(sample, tmp_path, writes_allowed=True)
 
-    assert command[0] == sample.adapter.name
+    assert sample.adapter.name in command
     joined = " ".join(command)
     assert "a-model" in joined
     assert "high" in joined
@@ -191,6 +191,14 @@ def test_a_task_that_declared_no_writes_is_told_so_in_the_command(
 
     assert contains(reading, sample.read_only_flags)
     assert not contains(writing, sample.read_only_flags)
+
+
+def test_opencode_read_only_tasks_inject_a_denied_edit_permission(tmp_path: Path) -> None:
+    command = build(SAMPLES["opencode"], tmp_path, writes_allowed=False)
+
+    setting = next(value for value in command if value.startswith("OPENCODE_CONFIG_CONTENT="))
+    config = json.loads(setting.split("=", 1)[1])
+    assert config["agent"]["claude-code-delegate-readonly"]["permission"]["edit"] == "deny"
 
 
 def test_a_role_that_runs_commands_gets_a_filesystem_it_can_write_to(

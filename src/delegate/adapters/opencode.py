@@ -14,6 +14,22 @@ from delegate.adapters.base import NormalizedEvent
 
 UNFINISHED = {"pending", "running"}
 
+READ_ONLY_AGENT = "claude-code-delegate-readonly"
+READ_ONLY_CONFIG = {
+    "agent": {
+        READ_ONLY_AGENT: {
+            "mode": "primary",
+            "permission": {
+                "edit": "deny",
+                "bash": "deny",
+                "task": "deny",
+                "webfetch": "deny",
+                "websearch": "deny",
+            },
+        }
+    }
+}
+
 
 class OpenCodeAdapter:
     name = "opencode"
@@ -30,12 +46,16 @@ class OpenCodeAdapter:
         writes_allowed: bool,
         runs_commands: bool,
     ) -> list[str]:
-        # opencode has no per-run permission flag, and was measured writing a file
-        # and running a shell command without `--auto`, the flag its own help calls
-        # dangerous. So a read-only task is read-only here by instruction only.
-        del writes_allowed, runs_commands
-        return [
-            "opencode",
+        read_only = not writes_allowed and not runs_commands
+        command = ["opencode"]
+        if read_only:
+            command = [
+                "env",
+                f"OPENCODE_CONFIG_CONTENT={json.dumps(READ_ONLY_CONFIG, separators=(',', ':'))}",
+                "opencode",
+            ]
+        command.extend(
+            [
             "run",
             "--format",
             "json",
@@ -45,8 +65,11 @@ class OpenCodeAdapter:
             model,
             "--variant",
             effort,
+            *(["--agent", READ_ONLY_AGENT] if read_only else []),
             prompt_path.read_text(encoding="utf-8"),
-        ]
+            ]
+        )
+        return command
 
     def parse_events(self, raw_line: str) -> list[NormalizedEvent]:
         try:

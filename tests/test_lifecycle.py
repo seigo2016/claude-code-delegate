@@ -242,6 +242,7 @@ def test_a_worker_that_vanished_is_reclassified_rather_than_left_running(
     reconciled = workspace.run("reconcile")
 
     assert reconciled["tasks"][0]["status"] == "orphaned"
+    assert reconciled["ready"][0]["task_id"] == handle["task_id"]
 
 
 def test_a_cancellation_stops_the_worker_without_signalling_the_supervisor(

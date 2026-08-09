@@ -107,6 +107,10 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         "This is a hard validity constraint: one overlong string fails the whole task. "
         "Keep each string within 240 characters so counting differences cannot cross the limit."
     )
+    lines.append(
+        "Before replying, check that the object has exactly these six keys and every list has "
+        "at most five items. Consolidate related facts instead of adding a sixth item."
+    )
     lines.append("Cite exact paths. Do not paste raw logs.")
     return "\n".join(lines) + "\n"
 

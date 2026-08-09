@@ -189,7 +189,18 @@ def _reconcile_state(state: dict[str, Any]) -> dict[str, Any]:
 def cmd_reconcile(args: argparse.Namespace) -> int:
     project_root = _root(args.project_root)
     reconciled = [_reconcile_state(state) for state in _states(project_root)]
-    _print({"tasks": [_line(state) for state in reconciled]})
+    ready = [
+        _line(state)
+        for state in reconciled
+        if state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
+    ]
+    _print(
+        {
+            "tasks": [_line(state) for state in reconciled],
+            "ready": ready,
+            "next_action": "collect each ready task once" if ready else None,
+        }
+    )
     return 0
 
 

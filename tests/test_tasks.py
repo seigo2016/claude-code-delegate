@@ -31,6 +31,7 @@ def test_the_prompt_states_the_result_shape_because_most_backends_cannot_be_hand
         assert field in prompt
     assert "hard validity constraint" in prompt
     assert "within 240 characters" in prompt
+    assert "exactly these six keys" in prompt
 
 
 def test_a_read_only_prompt_forbids_scratch_writes_as_well_as_repository_edits(

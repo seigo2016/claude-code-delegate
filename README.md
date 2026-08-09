@@ -178,16 +178,16 @@ no writes gets the narrowest posture its backend has:
 |---|---|---|
 | codex | `--sandbox read-only`, network closed | the operating system |
 | claude | `auto`, minus the editing tools | a classifier, and tools withheld |
-| opencode | no per-run flag to set | the prompt alone |
+| opencode | an injected `delegate-readonly` agent | OpenCode permissions |
 
-Only codex refuses in the kernel: an attempt to write came back `Read-only file
+Only codex refuses in the kernel: an attempt to write comes back `Read-only file
 system`. Claude Code is not handed the editing tools, and its classifier turned
 down every way round them that was tried: a shell redirect, `tee`, and a Python
-one-liner. That is a judgement made each time rather than a boundary. opencode was
-measured writing a file and running a shell command with no permission flag passed
-at all, so a read-only task on that backend is read-only by request. The task
-contract explicitly forbids scratch files in `.claude`, `/tmp`, and elsewhere;
-it does not make OpenCode's request-only boundary an enforced sandbox.
+one-liner. That is a judgement made each time rather than a boundary. OpenCode
+read-only tasks receive a per-run primary agent whose `edit`, `bash`, `task`,
+`webfetch`, and `websearch` permissions are denied. This is a tool-permission
+boundary, not an operating-system sandbox; the task contract still forbids
+scratch files in `.claude`, `/tmp`, and elsewhere.
 
 A role that runs tests or builds gets a writable filesystem even when it may not
 change the repository, because build tools write caches under the home directory.
@@ -206,9 +206,6 @@ setting could turn the skill from something Claude may reach for into something 
 has to. Left out for now: Claude was measured delegating a large reading job
 unprompted and doing a two-file check itself, and a refusal that is walked around
 by doing the same work another way is not enforcement.
-
-**A read-only posture for opencode.** It has no per-run permission flag, so a task
-that declared no writes is asked there rather than stopped.
 
 **Isolation.** Workers run in the work tree you are working in. A worktree each
 would contain them, but `bounded-implementer` exists to change that tree, so the
