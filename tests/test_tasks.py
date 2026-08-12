@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from delegate import config, envelope, tasks
 
 
@@ -51,6 +53,8 @@ def test_a_read_only_prompt_forbids_scratch_writes_as_well_as_repository_edits(
 
     assert "This is a read-only task." in prompt
     assert "create files in .claude, /tmp, or elsewhere" in prompt
+    assert "five highest-priority findings" in prompt
+    assert "write it to a file" not in prompt
 
 
 def test_a_writable_prompt_requires_exact_repository_relative_paths(tmp_path: Path) -> None:
@@ -68,3 +72,83 @@ def test_a_writable_prompt_requires_exact_repository_relative_paths(tmp_path: Pa
 
     assert "canonical repository-relative paths" in prompt
     assert "similarly named file elsewhere" in prompt
+    assert "write it to a file you were allowed to write" in prompt
+
+
+def packet(**updates: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "objective": "Inspect something.",
+        "read": ["README.md"],
+        "allowed_writes": [],
+        "required_evidence": ["a count"],
+        "host_only": False,
+    }
+    value.update(updates)
+    return value
+
+
+def settings(role: config.Role) -> config.Settings:
+    return config.Settings(
+        roles={role.name: role},
+        workers={
+            "claude": config.Worker(
+                name="claude",
+                adapter="claude",
+                enabled=True,
+                levels={"standard": config.Level(model="sonnet", effort="high")},
+            )
+        },
+        default_worker="claude",
+    )
+
+
+def test_read_only_role_refuses_a_write_scope_before_launch(tmp_path: Path) -> None:
+    role = config.Role(
+        name="auditor",
+        level="standard",
+        forbids_allowed_writes=True,
+    )
+
+    with pytest.raises(tasks.SubmitRefused, match="read-only"):
+        tasks.submit(
+            project_root=tmp_path,
+            settings=settings(role),
+            role=role.name,
+            title="audit",
+            value=packet(allowed_writes=["notes.md"]),
+        )
+
+
+@pytest.mark.parametrize("read", [["/mnt/data/run.json"], ["../other/README.md"], ["https://x.test"]])
+def test_repo_local_role_refuses_external_reads_before_launch(
+    tmp_path: Path, read: list[str]
+) -> None:
+    role = config.Role(name="auditor", level="standard", repo_local_reads=True)
+
+    with pytest.raises(tasks.SubmitRefused, match="repository-local reads only"):
+        tasks.submit(
+            project_root=tmp_path,
+            settings=settings(role),
+            role=role.name,
+            title="audit",
+            value=packet(read=read),
+        )
+
+
+def test_external_read_role_accepts_an_absolute_read(tmp_path: Path) -> None:
+    assert tasks._external_reads(["/mnt/data"]) == ["/mnt/data"]
+    assert tasks._external_reads(["README.md"]) == []
+
+
+@pytest.mark.parametrize("path", ["/tmp/result.md", "../result.md", "~/result.md"])
+def test_write_scope_must_be_repository_relative(tmp_path: Path, path: str) -> None:
+    role = config.Role(name="patcher", level="standard", requires_allowed_writes=True)
+
+    with pytest.raises(tasks.SubmitRefused, match="repository-relative"):
+        tasks.submit(
+            project_root=tmp_path,
+            settings=settings(role),
+            role=role.name,
+            title="patch",
+            value=packet(allowed_writes=[path]),
+        )

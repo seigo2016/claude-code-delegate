@@ -40,9 +40,13 @@ frontier = { model = "opus", effort = "xhigh" }
 
 [roles.artifact-auditor]
 level = "standard"
+forbids_allowed_writes = true
+repo_local_reads = true
 
 [roles.repo-cartographer]
 level = "light"
+forbids_allowed_writes = true
+repo_local_reads = true
 
 [roles.bounded-implementer]
 level = "standard"
@@ -57,7 +61,11 @@ runs_commands = true
 
 [roles.consistency-auditor]
 level = "light"
+forbids_allowed_writes = true
+repo_local_reads = true
 
 [roles.adversarial-critic]
 level = "frontier"
 timeout = 3600
+forbids_allowed_writes = true
+repo_local_reads = true

@@ -44,6 +44,8 @@ frontier = { model = "opus", effort = "xhigh" }
 
 [roles.artifact-auditor]
 level = "standard"
+forbids_allowed_writes = true
+repo_local_reads = true
 ```
 
 `examples/delegate.toml` in this repository carries all six roles and all three
@@ -118,7 +120,13 @@ A message that looks like a valid result is never promoted to one. It is kept
 beside the task.
 
 A result holds at most five strings of 300 characters per list. For a longer one,
-have the worker write a file and return its path.
+have a writable worker write a file and return its path. A read-only worker
+returns the five highest-priority findings and requests another bounded task.
+
+Roles may set \`requires_allowed_writes = true\` for patchers,
+\`forbids_allowed_writes = true\` for auditors, and
+\`repo_local_reads = true\` when absolute paths, parent traversal, and URLs must be
+refused before launch.
 
 `required_evidence` is instruction to the worker, and appears in its prompt. The
 contract checks that the evidence fields are present, well formed and within those

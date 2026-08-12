@@ -99,7 +99,7 @@ def test_the_entrypoint_runs_without_the_package_being_installed(tmp_path: Path)
     )
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {"tasks": []}
+    assert json.loads(result.stdout) == {"tasks": [], "ready": [], "next_action": None}
 
 
 def test_the_example_settings_enable_nothing_the_reader_did_not_choose() -> None:

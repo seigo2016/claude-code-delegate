@@ -98,10 +98,16 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     lines.append("Reply with this JSON object and nothing else. No prose, no code fence:")
     lines.append(json.dumps({field: _SHAPE[field] for field in envelope.FIELDS}, indent=2))
     lines.append("")
+    overflow = (
+        "write it to a file you were allowed to write and return its path"
+        if value["allowed_writes"]
+        else "return the five highest-priority findings and set status to decision_needed "
+        "when another bounded task is required"
+    )
     lines.append(
         f"Each list holds at most {envelope.MAX_ITEMS} strings of "
         f"{envelope.MAX_ITEM_CHARS} characters or fewer. If the answer needs more than "
-        "that, write it to a file you were allowed to write and return its path."
+        f"that, {overflow}."
     )
     lines.append(
         "This is a hard validity constraint: one overlong string fails the whole task. "
@@ -149,6 +155,20 @@ def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str,
     }
 
 
+def _non_repo_relative(values: list[str]) -> list[str]:
+    invalid = []
+    for value in values:
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts or value.startswith("~"):
+            invalid.append(value)
+    return invalid
+
+
+def _external_reads(values: list[str]) -> list[str]:
+    invalid_paths = set(_non_repo_relative(values))
+    return [value for value in values if "://" in value or value in invalid_paths]
+
+
 def submit(
     *,
     project_root: Path,
@@ -165,6 +185,22 @@ def submit(
     plan = settings.plan(role, worker=worker)
     if plan.role.requires_allowed_writes and not value["allowed_writes"]:
         raise SubmitRefused(f"role {role} requires a non-empty allowed_writes")
+    if plan.role.forbids_allowed_writes and value["allowed_writes"]:
+        raise SubmitRefused(f"role {role} is read-only and forbids allowed_writes")
+
+    invalid_writes = _non_repo_relative(value["allowed_writes"])
+    if invalid_writes:
+        raise SubmitRefused(
+            "allowed_writes must contain canonical repository-relative paths",
+            invalid_allowed_writes=invalid_writes,
+        )
+    if plan.role.repo_local_reads:
+        invalid_reads = _external_reads(value["read"])
+        if invalid_reads:
+            raise SubmitRefused(
+                f"role {role} accepts repository-local reads only",
+                invalid_reads=invalid_reads,
+            )
     try:
         registry.get(plan.adapter)
     except KeyError as error:

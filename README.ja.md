@@ -38,6 +38,8 @@ frontier = { model = "opus", effort = "xhigh" }
 
 [roles.artifact-auditor]
 level = "standard"
+forbids_allowed_writes = true
+repo_local_reads = true
 ```
 
 この repository の `examples/delegate.toml` には 6 つの role と 3 つの backend が、すべて無効の状態で入っています。
@@ -99,7 +101,9 @@ timeout には停止位置の読みが付きます。`tool_stall` / `finalizatio
 
 正しい結果に見えるだけのメッセージを、正常な結果として扱うことはありません。task directory に保存します。
 
-結果は 1 つの list につき、300 文字以内の文字列を 5 件までです。それより長い結果が必要な場合は、worker にファイルを書かせて path を返させてください。
+結果は 1 つの list につき、300 文字以内の文字列を 5 件までです。それより長い結果が必要な場合、書き込み可能な worker はファイルの path を返し、read-only worker は重要度上位 5 件と追加 task の要否を返します。
+
+patcher には \`requires_allowed_writes = true\`、auditor には \`forbids_allowed_writes = true\` を指定できます。絶対 path、親 directory、URL を起動前に拒否する repo-local role には \`repo_local_reads = true\` を指定します。
 
 `required_evidence` は worker への指示で、prompt に載ります。契約が確認するのは、evidence の各欄が存在し、形式と上限を満たすことです。要求した内容に答えているかは照合せず、内容の真偽も判定できません。
 
