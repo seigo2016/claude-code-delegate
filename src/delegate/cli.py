@@ -371,16 +371,21 @@ def cmd_hook_watch(args: argparse.Namespace) -> int:
     """Maintain this Claude Code session's delegated-task completion watch."""
     try:
         hook_input = json.load(sys.stdin)
+        event_name = hook_input.get("hook_event_name")
         if (
-            hook_input.get("hook_event_name") != "PostToolUse"
+            event_name not in {"PostToolUse", "PostToolUseFailure"}
             or hook_input.get("tool_name") != "Bash"
         ):
-            raise ValueError("not a Bash PostToolUse hook")
+            raise ValueError("not a Bash completion hook")
         session_id = hook_input["session_id"]
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("missing session_id")
-        stdout = hook_input["tool_response"]["stdout"]
-        handles = _handles_if_present(stdout)
+        output = (
+            hook_input["tool_response"]["stdout"]
+            if event_name == "PostToolUse"
+            else hook_input["error"]
+        )
+        handles = _handles_if_present(output)
         submitted = _watch_tasks_from_handles(handles) if handles else []
         watched = _watch_tasks_from_handles([*_read_session_watches(session_id), *handles])
     except (KeyError, TypeError, OSError, ValueError, json.JSONDecodeError):

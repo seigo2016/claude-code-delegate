@@ -56,18 +56,16 @@ def test_every_hook_points_at_a_command_that_exists() -> None:
 def test_the_finished_task_hook_wakes_the_session_instead_of_blocking_it() -> None:
     hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
 
-    (post,) = hooks["PostToolUse"]
-    (hook,) = post["hooks"]
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        (post,) = hooks[event]
+        (hook,) = post["hooks"]
 
-    assert post["matcher"] == "Bash"
-    assert hook["asyncRewake"] is True
-    assert hook["rewakeMessage"]
-    assert "_hook-watch" in hook["command"]
-    assert "CLAUDE_PROJECT_DIR" not in hook["command"]
-    # asyncRewake is documented as implying async, but only backgrounds the hook in
-    # an interactive session. Under `claude -p` this one would run in the foreground
-    # and hold up the call that triggered it for the whole of its timeout.
-    assert hook["async"] is True
+        assert post["matcher"] == "Bash"
+        assert hook["asyncRewake"] is True
+        assert hook["rewakeMessage"]
+        assert "_hook-watch" in hook["command"]
+        assert "CLAUDE_PROJECT_DIR" not in hook["command"]
+        assert hook["async"] is True
 
 
 def test_the_hook_waits_longer_than_a_task_is_allowed_to_run() -> None:

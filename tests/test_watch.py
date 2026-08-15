@@ -42,18 +42,22 @@ def hook_watch(
     cwd: Path,
     seconds: str = "1",
     session_id: str = "session-1",
+    event_name: str = "PostToolUse",
 ) -> subprocess.CompletedProcess[str]:
     hook_input = {
         "session_id": session_id,
-        "hook_event_name": "PostToolUse",
+        "hook_event_name": event_name,
         "tool_name": "Bash",
-        "tool_response": {
+    }
+    if event_name == "PostToolUse":
+        hook_input["tool_response"] = {
             "stdout": tool_stdout,
             "stderr": "",
             "interrupted": False,
             "isImage": False,
-        },
-    }
+        }
+    else:
+        hook_input["error"] = tool_stdout
     return subprocess.run(
         [sys.executable, "-m", "delegate", "_hook-watch"],
         input=json.dumps(hook_input),
@@ -114,6 +118,23 @@ def test_the_hook_accepts_a_handle_before_other_bash_output(
         f"{json.dumps(handle)}\npacket retained at /tmp/task.json",
         cwd=tmp_path,
         seconds="20",
+    )
+
+    assert result.returncode == WAKE
+    assert json.loads(result.stdout)["ready"][0]["task_id"] == handle["task_id"]
+
+
+def test_the_failure_hook_watches_a_task_started_before_later_bash_failure(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    handle = workspace.submit()
+
+    result = hook_watch(
+        workspace,
+        f'Exit code 1\n{json.dumps(handle)}\n{{"error": "later command failed"}}',
+        cwd=tmp_path,
+        seconds="20",
+        event_name="PostToolUseFailure",
     )
 
     assert result.returncode == WAKE
