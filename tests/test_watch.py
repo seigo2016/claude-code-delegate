@@ -41,8 +41,10 @@ def hook_watch(
     *,
     cwd: Path,
     seconds: str = "1",
+    session_id: str = "session-1",
 ) -> subprocess.CompletedProcess[str]:
     hook_input = {
+        "session_id": session_id,
         "hook_event_name": "PostToolUse",
         "tool_name": "Bash",
         "tool_response": {
@@ -57,7 +59,11 @@ def hook_watch(
         input=json.dumps(hook_input),
         capture_output=True,
         text=True,
-        env={**workspace.env, "DELEGATE_WATCH_SEC": seconds},
+        env={
+            **workspace.env,
+            "DELEGATE_WATCH_SEC": seconds,
+            "DELEGATE_WATCH_ROOT": str(workspace.repo / ".delegate-watch-sessions"),
+        },
         cwd=cwd,
     )
 
@@ -141,10 +147,19 @@ def test_the_hook_watches_every_handle_from_one_bash_result(
     workspace.run("cancel", first["task_id"])
 
 
-def test_collect_rearms_the_remaining_tasks_from_one_bash_result(
+def test_collect_rearms_the_remaining_tasks_when_its_output_is_filtered(
     workspace: Workspace, tmp_path: Path
 ) -> None:
+    workspace.mode("silent_hang")
     first = workspace.submit(title="first")
+    deadline = time.monotonic() + 2
+    while workspace.run("status", first["task_id"])["status"] != "running":
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    while not workspace.calls():
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    workspace.mode("success")
     second = workspace.submit(title="second")
     hook_watch(
         workspace,
@@ -153,11 +168,40 @@ def test_collect_rearms_the_remaining_tasks_from_one_bash_result(
         seconds="20",
     )
 
-    collected = workspace.run("collect", first["task_id"])
-    result = hook_watch(workspace, json.dumps(collected), cwd=tmp_path, seconds="20")
+    workspace.run("collect", second["task_id"])
+    hook_input = {
+        "session_id": "session-1",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_response": {"stdout": '{"status":"completed"}'},
+    }
+    result = subprocess.Popen(
+        [sys.executable, "-m", "delegate", "_hook-watch"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={
+            **workspace.env,
+            "DELEGATE_WATCH_SEC": "20",
+            "DELEGATE_WATCH_ROOT": str(workspace.repo / ".delegate-watch-sessions"),
+        },
+        cwd=tmp_path,
+    )
+    assert result.stdin is not None
+    result.stdin.write(json.dumps(hook_input))
+    result.stdin.close()
+    deadline = time.monotonic() + 2
+    task_lock = workspace.repo / ".claude" / "logs" / "delegate" / first["task_id"] / "watch.lock"
+    while not liveness.worker_alive(task_lock) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert liveness.worker_alive(task_lock)
+    workspace.run("cancel", first["task_id"])
+    result.wait(timeout=5)
 
     assert result.returncode == WAKE
-    assert json.loads(result.stdout)["ready"][0]["task_id"] == second["task_id"]
+    assert result.stdout is not None
+    assert json.loads(result.stdout.read())["ready"][0]["task_id"] == first["task_id"]
 
 
 def test_the_hook_ignores_json_that_does_not_name_a_task(
@@ -195,6 +239,7 @@ def test_each_submitted_task_keeps_its_own_completion_watcher(
     first = workspace.submit(title="first")
     first_input = json.dumps(
         {
+            "session_id": "session-1",
             "hook_event_name": "PostToolUse",
             "tool_name": "Bash",
             "tool_response": {"stdout": json.dumps(first)},
@@ -206,7 +251,11 @@ def test_each_submitted_task_keeps_its_own_completion_watcher(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env={**workspace.env, "DELEGATE_WATCH_SEC": "20"},
+        env={
+            **workspace.env,
+            "DELEGATE_WATCH_SEC": "20",
+            "DELEGATE_WATCH_ROOT": str(workspace.repo / ".delegate-watch-sessions"),
+        },
         cwd=tmp_path,
     )
     assert first_hook.stdin is not None

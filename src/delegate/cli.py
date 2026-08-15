@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -238,6 +239,125 @@ def _handles_from_stdout(stdout: str) -> list[dict[str, Any]]:
     return handles
 
 
+def _handles_if_present(stdout: str) -> list[dict[str, Any]]:
+    try:
+        return _handles_from_stdout(stdout)
+    except ValueError:
+        return []
+
+
+def _watch_registry_dir(session_id: str) -> Path:
+    root = Path(
+        os.environ.get("DELEGATE_WATCH_ROOT")
+        or Path.home() / ".claude" / "delegate" / "watch-sessions"
+    )
+    digest = hashlib.sha256(session_id.encode()).hexdigest()
+    return root / digest
+
+
+def _watch_group_path(session_id: str, watched: list[tuple[Path, str]]) -> Path:
+    value = [
+        {"project_root": str(project_root), "task_id": task_id}
+        for project_root, task_id in sorted(watched)
+    ]
+    digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    return _watch_registry_dir(session_id) / f"{digest}.json"
+
+
+def _read_session_watches(session_id: str) -> list[dict[str, str]]:
+    found = []
+    for path in _watch_registry_dir(session_id).glob("*.json"):
+        try:
+            value = store.read_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if value.get("session_id") != session_id:
+            continue
+        watches = value.get("watch_tasks")
+        if not isinstance(watches, list):
+            continue
+        found.extend(
+            {"project_root": entry["project_root"], "task_id": entry["task_id"]}
+            for entry in watches
+            if isinstance(entry, dict)
+            and isinstance(entry.get("project_root"), str)
+            and isinstance(entry.get("task_id"), str)
+        )
+    return found
+
+
+def _remember_session_watch_group(session_id: str, watched: list[tuple[Path, str]]) -> None:
+    if not watched:
+        return
+    store.write_json(
+        _watch_group_path(session_id, watched),
+        {
+            "session_id": session_id,
+            "watch_tasks": [
+                {"project_root": str(project_root), "task_id": task_id}
+                for project_root, task_id in watched
+            ],
+        },
+    )
+
+
+def _prune_session_watches(session_id: str) -> None:
+    for path in _watch_registry_dir(session_id).glob("*.json"):
+        try:
+            value = store.read_json(path)
+            if value.get("session_id") != session_id:
+                continue
+            watches = _watch_tasks_from_handles(value["watch_tasks"])
+        except (KeyError, OSError, ValueError, json.JSONDecodeError):
+            path.unlink(missing_ok=True)
+            continue
+        active = _active_session_watches(watches)
+        if active:
+            store.write_json(
+                path,
+                {
+                    "session_id": session_id,
+                    "watch_tasks": [
+                        {"project_root": str(project_root), "task_id": task_id}
+                        for project_root, task_id in active
+                    ],
+                },
+            )
+        else:
+            path.unlink(missing_ok=True)
+
+
+def _watch_tasks_from_handles(handles: list[dict[str, Any]]) -> list[tuple[Path, str]]:
+    watched = []
+    seen = set()
+    for handle in handles:
+        project_root = _root(handle["project_root"])
+        _, state = _load_task(project_root, handle["task_id"])
+        if (
+            state.get("project_root") != str(project_root)
+            or state.get("task_id") != handle["task_id"]
+        ):
+            raise ValueError("task handle does not match task state")
+        identity = (project_root, state["task_id"])
+        if identity not in seen:
+            watched.append(identity)
+            seen.add(identity)
+    return watched
+
+
+def _active_session_watches(watched: list[tuple[Path, str]]) -> list[tuple[Path, str]]:
+    active = []
+    for project_root, task_id in watched:
+        try:
+            _, state = _load_task(project_root, task_id)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        state = _reconcile_state(state)
+        if state["status"] in events.ACTIVE_STATES:
+            active.append((project_root, task_id))
+    return active
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     """Wait until something is worth waking the session for.
 
@@ -248,29 +368,30 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 
 def cmd_hook_watch(args: argparse.Namespace) -> int:
-    """Watch only when the Bash result is a handle returned by ``delegate submit``."""
+    """Maintain this Claude Code session's delegated-task completion watch."""
     try:
         hook_input = json.load(sys.stdin)
+        if (
+            hook_input.get("hook_event_name") != "PostToolUse"
+            or hook_input.get("tool_name") != "Bash"
+        ):
+            raise ValueError("not a Bash PostToolUse hook")
+        session_id = hook_input["session_id"]
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("missing session_id")
         stdout = hook_input["tool_response"]["stdout"]
-        handles = _handles_from_stdout(stdout)
-        watched = []
-        for handle in handles:
-            project_root = _root(handle["project_root"])
-            _, state = _load_task(project_root, handle["task_id"])
-            if (
-                state.get("project_root") != str(project_root)
-                or state.get("task_id") != handle["task_id"]
-            ):
-                raise ValueError("task handle does not match task state")
-            watched.append((project_root, state["task_id"]))
+        handles = _handles_if_present(stdout)
+        submitted = _watch_tasks_from_handles(handles) if handles else []
+        watched = _watch_tasks_from_handles([*_read_session_watches(session_id), *handles])
     except (KeyError, TypeError, OSError, ValueError, json.JSONDecodeError):
         _print({"ready": []})
         return QUIET
-    if hook_input.get("hook_event_name") != "PostToolUse" or hook_input.get("tool_name") != "Bash":
-        _print({"ready": []})
-        return QUIET
-    _remember_watch_group(watched)
-    return _watch_tasks(watched)
+    _remember_watch_group(submitted)
+    _remember_session_watch_group(session_id, submitted)
+    result = _watch_tasks(watched)
+    if result == WAKE:
+        _prune_session_watches(session_id)
+    return result
 
 
 def _remember_watch_group(watched: list[tuple[Path, str]]) -> None:
