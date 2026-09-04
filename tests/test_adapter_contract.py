@@ -155,7 +155,12 @@ def contains(command: list[str], run: tuple[str, ...]) -> bool:
 
 
 def build(
-    sample: Sample, tmp_path: Path, *, writes_allowed: bool, runs_commands: bool = False
+    sample: Sample,
+    tmp_path: Path,
+    *,
+    writes_allowed: bool,
+    runs_commands: bool = False,
+    allowed_read_roots: tuple[str, ...] = (),
 ) -> list[str]:
     prompt = tmp_path / "prompt.md"
     prompt.write_text("do the thing", encoding="utf-8")
@@ -168,6 +173,7 @@ def build(
         effort="high",
         writes_allowed=writes_allowed,
         runs_commands=runs_commands,
+        allowed_read_roots=allowed_read_roots,
     )
 
 
@@ -199,6 +205,20 @@ def test_opencode_read_only_tasks_inject_a_denied_edit_permission(tmp_path: Path
     setting = next(value for value in command if value.startswith("OPENCODE_CONFIG_CONTENT="))
     config = json.loads(setting.split("=", 1)[1])
     assert config["agent"]["claude-code-delegate-readonly"]["permission"]["edit"] == "deny"
+
+
+def test_opencode_read_only_tasks_allow_only_declared_external_roots(tmp_path: Path) -> None:
+    command = build(
+        SAMPLES["opencode"],
+        tmp_path,
+        writes_allowed=False,
+        allowed_read_roots=("/mnt/research-data",),
+    )
+
+    setting = next(value for value in command if value.startswith("OPENCODE_CONFIG_CONTENT="))
+    config = json.loads(setting.split("=", 1)[1])
+    rules = config["agent"]["claude-code-delegate-readonly"]["permission"]["external_directory"]
+    assert rules == {"*": "deny", "/mnt/research-data": "allow", "/mnt/research-data/**": "allow"}
 
 
 def test_a_role_that_runs_commands_gets_a_filesystem_it_can_write_to(

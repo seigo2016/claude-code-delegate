@@ -44,6 +44,7 @@ class WorkerAdapter(Protocol):
         effort: str,
         writes_allowed: bool,
         runs_commands: bool,
+        allowed_read_roots: tuple[str, ...] = (),
     ) -> list[str]: ...
 
     def parse_events(self, raw_line: str) -> list[NormalizedEvent]: ...

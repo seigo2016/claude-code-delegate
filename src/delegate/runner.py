@@ -122,6 +122,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             effort=str(state["effort"]),
             writes_allowed=bool(state["writes_allowed"]),
             runs_commands=bool(state["runs_commands"]),
+            allowed_read_roots=tuple(state["allowed_read_roots"]),
         )
 
         cancelled = False

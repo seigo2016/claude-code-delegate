@@ -31,6 +31,17 @@ READ_ONLY_CONFIG = {
 }
 
 
+def read_only_config(allowed_read_roots: tuple[str, ...]) -> dict[str, Any]:
+    config = json.loads(json.dumps(READ_ONLY_CONFIG))
+    if allowed_read_roots:
+        rules = {"*": "deny"}
+        for root in allowed_read_roots:
+            rules[root] = "allow"
+            rules[f"{root.rstrip('/')}/**" if root != "/" else "/**"] = "allow"
+        config["agent"][READ_ONLY_AGENT]["permission"]["external_directory"] = rules
+    return config
+
+
 class OpenCodeAdapter:
     name = "opencode"
 
@@ -45,28 +56,31 @@ class OpenCodeAdapter:
         effort: str,
         writes_allowed: bool,
         runs_commands: bool,
+        allowed_read_roots: tuple[str, ...] = (),
     ) -> list[str]:
         read_only = not writes_allowed and not runs_commands
         command = ["opencode"]
         if read_only:
+            config = read_only_config(allowed_read_roots)
+            config_content = json.dumps(config, separators=(",", ":"))
             command = [
                 "env",
-                f"OPENCODE_CONFIG_CONTENT={json.dumps(READ_ONLY_CONFIG, separators=(',', ':'))}",
+                f"OPENCODE_CONFIG_CONTENT={config_content}",
                 "opencode",
             ]
         command.extend(
             [
-            "run",
-            "--format",
-            "json",
-            "--dir",
-            str(project_root),
-            "-m",
-            model,
-            "--variant",
-            effort,
-            *(["--agent", READ_ONLY_AGENT] if read_only else []),
-            prompt_path.read_text(encoding="utf-8"),
+                "run",
+                "--format",
+                "json",
+                "--dir",
+                str(project_root),
+                "-m",
+                model,
+                "--variant",
+                effort,
+                *(["--agent", READ_ONLY_AGENT] if read_only else []),
+                prompt_path.read_text(encoding="utf-8"),
             ]
         )
         return command

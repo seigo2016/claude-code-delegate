@@ -174,9 +174,7 @@ def _is_within_allowed_read_root(value: str, roots: tuple[str, ...]) -> bool:
     if not path.is_absolute():
         return False
     resolved_path = path.resolve(strict=False)
-    return any(
-        resolved_path.is_relative_to(Path(root).resolve(strict=False)) for root in roots
-    )
+    return any(resolved_path.is_relative_to(Path(root).resolve(strict=False)) for root in roots)
 
 
 def _invalid_scoped_reads(values: list[str], role: config.Role) -> list[str]:
@@ -255,6 +253,7 @@ def submit(
         # answer what its worker was allowed to do.
         "writes_allowed": bool(value["allowed_writes"]),
         "runs_commands": plan.role.runs_commands,
+        "allowed_read_roots": list(plan.role.allowed_read_roots),
         "timeout_sec": plan.timeout,
         "pid": None,
         "session_id": None,
