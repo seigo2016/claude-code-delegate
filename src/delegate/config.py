@@ -27,6 +27,7 @@ class Role:
     requires_allowed_writes: bool = False
     forbids_allowed_writes: bool = False
     repo_local_reads: bool = False
+    allowed_read_roots: tuple[str, ...] = ()
     #: A build or a test suite writes outside the repository whether or not the task
     #: may change it, so this is separate from the write scope.
     runs_commands: bool = False
@@ -117,6 +118,15 @@ def _required(body: dict[str, Any], key: str, where: str) -> Any:
     return body[key]
 
 
+def _allowed_read_roots(body: dict[str, Any], where: str) -> tuple[str, ...]:
+    values = body.get("allowed_read_roots", [])
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise ConfigError(f"{where}.allowed_read_roots must be an array of absolute paths")
+    if any(not Path(value).is_absolute() for value in values):
+        raise ConfigError(f"{where}.allowed_read_roots must contain absolute paths")
+    return tuple(values)
+
+
 def load(path: Path) -> Settings:
     with path.open("rb") as handle:
         try:
@@ -124,18 +134,25 @@ def load(path: Path) -> Settings:
         except tomllib.TOMLDecodeError as error:
             raise ConfigError(f"{path} is not valid TOML: {error}") from error
 
-    roles = {
-        name: Role(
+    roles = {}
+    for name, body in raw.get("roles", {}).items():
+        where = f"roles.{name}"
+        repo_local_reads = bool(body.get("repo_local_reads", False))
+        allowed_read_roots = _allowed_read_roots(body, where)
+        if allowed_read_roots and not repo_local_reads:
+            raise ConfigError(
+                f"{where}.allowed_read_roots requires repo_local_reads = true"
+            )
+        roles[name] = Role(
             name=name,
-            level=str(_required(body, "level", f"roles.{name}")),
+            level=str(_required(body, "level", where)),
             timeout=int(body.get("timeout", DEFAULT_TIMEOUT)),
             requires_allowed_writes=bool(body.get("requires_allowed_writes", False)),
             forbids_allowed_writes=bool(body.get("forbids_allowed_writes", False)),
-            repo_local_reads=bool(body.get("repo_local_reads", False)),
+            repo_local_reads=repo_local_reads,
+            allowed_read_roots=allowed_read_roots,
             runs_commands=bool(body.get("runs_commands", False)),
         )
-        for name, body in raw.get("roles", {}).items()
-    }
     workers = {
         name: Worker(
             name=name,

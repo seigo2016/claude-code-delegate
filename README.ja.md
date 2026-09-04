@@ -105,6 +105,8 @@ timeout には停止位置の読みが付きます。`tool_stall` / `finalizatio
 
 patcher には \`requires_allowed_writes = true\`、auditor には \`forbids_allowed_writes = true\` を指定できます。絶対 path、親 directory、URL を起動前に拒否する repo-local role には \`repo_local_reads = true\` を指定します。
 
+厳格な role で mount 済みデータを読む必要がある場合は、\`repo_local_reads = true\` を維持したまま \`allowed_read_roots = ["/mnt/research-data"]\` を追加します。絶対 path は列挙した root 配下へ解決される場合だけ許可され、root 外へ解決される symlink は拒否されます。この指定は \`repo_local_reads = true\` を必要とし、書き込み scope を広げません。
+
 `required_evidence` は worker への指示で、prompt に載ります。契約が確認するのは、evidence の各欄が存在し、形式と上限を満たすことです。要求した内容に答えているかは照合せず、内容の真偽も判定できません。
 
 live な session state を必要とする作業や、事後承認では済まず人が下すべき判断には、Claude が `"host_only": true` を付けます。この場合 submit は送信せずに拒否します。packet に明示的に書く指定であり、内容を自動分類する機能ではありません。

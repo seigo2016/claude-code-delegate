@@ -31,6 +31,7 @@ standard = { model = "kimi", effort = "high" }
 level = "standard"
 forbids_allowed_writes = true
 repo_local_reads = true
+allowed_read_roots = ["/mnt/research-data"]
 
 [roles.adversarial-critic]
 level = "frontier"
@@ -60,6 +61,7 @@ def test_a_role_resolves_through_the_level_the_default_worker_defines(tmp_path: 
     assert plan.timeout == config.DEFAULT_TIMEOUT
     assert plan.role.forbids_allowed_writes is True
     assert plan.role.repo_local_reads is True
+    assert plan.role.allowed_read_roots == ("/mnt/research-data",)
 
 
 def test_the_same_role_resolves_differently_on_another_worker(tmp_path: Path) -> None:

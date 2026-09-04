@@ -140,6 +140,61 @@ def test_external_read_role_accepts_an_absolute_read(tmp_path: Path) -> None:
     assert tasks._external_reads(["README.md"]) == []
 
 
+def test_repo_local_role_allows_only_configured_external_read_roots(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "mounted-data"
+    allowed_root.mkdir()
+    allowed_file = allowed_root / "run.json"
+    allowed_file.write_text("{}", encoding="utf-8")
+    role = config.Role(
+        name="auditor",
+        level="standard",
+        repo_local_reads=True,
+        allowed_read_roots=(str(allowed_root),),
+    )
+
+    tasks.submit(
+        project_root=tmp_path,
+        settings=settings(role),
+        role=role.name,
+        title="allowed mounted data",
+        value=packet(read=[str(allowed_file)]),
+    )
+
+    with pytest.raises(tasks.SubmitRefused, match="allowed_read_roots"):
+        tasks.submit(
+            project_root=tmp_path,
+            settings=settings(role),
+            role=role.name,
+            title="outside mounted data",
+            value=packet(read=["/mnt/not-allowed/run.json"]),
+        )
+
+
+def test_repo_local_role_rejects_a_path_that_escapes_an_allowed_root_via_symlink(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "mounted-data"
+    allowed_root.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    (allowed_root / "escape.json").symlink_to(outside)
+    role = config.Role(
+        name="auditor",
+        level="standard",
+        repo_local_reads=True,
+        allowed_read_roots=(str(allowed_root),),
+    )
+
+    with pytest.raises(tasks.SubmitRefused, match="allowed_read_roots"):
+        tasks.submit(
+            project_root=tmp_path,
+            settings=settings(role),
+            role=role.name,
+            title="symlink escape",
+            value=packet(read=[str(allowed_root / "escape.json")]),
+        )
+
+
 @pytest.mark.parametrize("path", ["/tmp/result.md", "../result.md", "~/result.md"])
 def test_write_scope_must_be_repository_relative(tmp_path: Path, path: str) -> None:
     role = config.Role(name="patcher", level="standard", requires_allowed_writes=True)

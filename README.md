@@ -128,6 +128,12 @@ Roles may set \`requires_allowed_writes = true\` for patchers,
 \`repo_local_reads = true\` when absolute paths, parent traversal, and URLs must be
 refused before launch.
 
+For a strict role that must inspect a mounted data root, keep
+\`repo_local_reads = true\` and add \`allowed_read_roots = ["/mnt/research-data"]\`.
+Only absolute reads that resolve under one of those roots are accepted; a symlink
+that resolves outside is refused. This option requires \`repo_local_reads = true\`
+and does not broaden write scope.
+
 `required_evidence` is instruction to the worker, and appears in its prompt. The
 contract checks that the evidence fields are present, well formed and within those
 limits. It does not check that they answer what was asked, and it cannot tell

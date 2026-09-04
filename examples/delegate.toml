@@ -42,6 +42,7 @@ frontier = { model = "opus", effort = "xhigh" }
 level = "standard"
 forbids_allowed_writes = true
 repo_local_reads = true
+allowed_read_roots = ["/mnt/research-data"]
 
 [roles.repo-cartographer]
 level = "light"

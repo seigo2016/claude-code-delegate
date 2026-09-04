@@ -169,6 +169,26 @@ def _external_reads(values: list[str]) -> list[str]:
     return [value for value in values if "://" in value or value in invalid_paths]
 
 
+def _is_within_allowed_read_root(value: str, roots: tuple[str, ...]) -> bool:
+    path = Path(value)
+    if not path.is_absolute():
+        return False
+    resolved_path = path.resolve(strict=False)
+    return any(
+        resolved_path.is_relative_to(Path(root).resolve(strict=False)) for root in roots
+    )
+
+
+def _invalid_scoped_reads(values: list[str], role: config.Role) -> list[str]:
+    invalid = []
+    for value in values:
+        if value in _external_reads([value]) and not _is_within_allowed_read_root(
+            value, role.allowed_read_roots
+        ):
+            invalid.append(value)
+    return invalid
+
+
 def submit(
     *,
     project_root: Path,
@@ -195,10 +215,11 @@ def submit(
             invalid_allowed_writes=invalid_writes,
         )
     if plan.role.repo_local_reads:
-        invalid_reads = _external_reads(value["read"])
+        invalid_reads = _invalid_scoped_reads(value["read"], plan.role)
         if invalid_reads:
             raise SubmitRefused(
-                f"role {role} accepts repository-local reads only",
+                f"role {role} accepts repository-local reads only, "
+                "plus configured allowed_read_roots",
                 invalid_reads=invalid_reads,
             )
     try:
