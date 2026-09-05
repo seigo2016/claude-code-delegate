@@ -119,7 +119,9 @@ def test_read_only_role_refuses_a_write_scope_before_launch(tmp_path: Path) -> N
         )
 
 
-@pytest.mark.parametrize("read", [["/mnt/data/run.json"], ["../other/README.md"], ["https://x.test"]])
+@pytest.mark.parametrize(
+    "read", [["/mnt/data/run.json"], ["../other/README.md"], ["https://x.test"]]
+)
 def test_repo_local_role_refuses_external_reads_before_launch(
     tmp_path: Path, read: list[str]
 ) -> None:

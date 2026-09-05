@@ -140,9 +140,7 @@ def load(path: Path) -> Settings:
         repo_local_reads = bool(body.get("repo_local_reads", False))
         allowed_read_roots = _allowed_read_roots(body, where)
         if allowed_read_roots and not repo_local_reads:
-            raise ConfigError(
-                f"{where}.allowed_read_roots requires repo_local_reads = true"
-            )
+            raise ConfigError(f"{where}.allowed_read_roots requires repo_local_reads = true")
         roles[name] = Role(
             name=name,
             level=str(_required(body, "level", where)),
