@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from delegate.adapters import claude, codex, opencode
+from delegate.adapters import agy, claude, codex, opencode
 from delegate.adapters.base import WorkerAdapter
 
 FINAL = json.dumps(
@@ -102,6 +102,34 @@ SAMPLES = {
         ),
         tool_started_line=None,
         read_only_flags=("--disallowed-tools", "Edit", "Write", "NotebookEdit"),
+    ),
+    "agy": Sample(
+        adapter=agy.AgyAdapter(),
+        session_line=json.dumps({"event": "init", "conversation_id": "c8aae049", "init": {}}),
+        session_id="c8aae049",
+        final_line=json.dumps(
+            {
+                "event": "result",
+                "result": {
+                    "conversation_id": "c8aae049",
+                    "status": "SUCCESS",
+                    "response": FINAL,
+                },
+            }
+        ),
+        tool_started_line=json.dumps(
+            {
+                "event": "step_update",
+                "step_update": {
+                    "conversation_id": "c8aae049",
+                    "step_index": 2,
+                    "state": "ACTIVE",
+                    "step_type": "tool",
+                    "tool_name": "run_command",
+                },
+            }
+        ),
+        read_only_flags=("--mode", "plan"),
     ),
 }
 
@@ -352,8 +380,26 @@ def test_a_run_that_was_refused_things_says_so(sample: Sample) -> None:
                 }
             ),
         ),
+        (
+            agy.AgyAdapter(),
+            json.dumps(
+                {
+                    "event": "step_update",
+                    "step_update": {
+                        "step_index": 2,
+                        "state": "ACTIVE",
+                        "step_type": "tool",
+                        "tool_name": "write_to_file",
+                        "tool_info": {
+                            "name": "write_to_file",
+                            "parameters": {"TargetFile": "/repo/changed.txt"},
+                        },
+                    },
+                }
+            ),
+        ),
     ],
-    ids=("codex", "opencode", "claude", "claude-notebook"),
+    ids=("codex", "opencode", "claude", "claude-notebook", "agy"),
 )
 def test_an_explicit_file_change_carries_its_path(adapter: WorkerAdapter, line: str) -> None:
     events = adapter.parse_events(line)
@@ -380,3 +426,56 @@ def test_claude_reports_whether_a_tool_completed_successfully() -> None:
     (event,) = claude.ClaudeAdapter().parse_events(line)
 
     assert event.succeeded is False
+
+
+def test_agy_command_reads_from_stdin_and_pins_directory(tmp_path: Path) -> None:
+    command = build(SAMPLES["agy"], tmp_path, writes_allowed=True)
+    assert contains(command, ("--input-format", "text"))
+    assert contains(command, ("--disable-slash-commands",))
+    assert contains(command, ("--add-dir", str(tmp_path)))
+    assert "do the thing" not in command
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "expected_type"),
+    [
+        ("run_command", "command_execution"),
+        ("search_web", "web_search"),
+        ("view_file", "dynamic_tool_call"),
+    ],
+)
+def test_agy_maps_tool_names_to_stallable_item_types(tool_name: str, expected_type: str) -> None:
+    line = json.dumps(
+        {
+            "event": "step_update",
+            "step_update": {
+                "step_index": 2,
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_name": tool_name,
+            },
+        }
+    )
+    (event,) = agy.AgyAdapter().parse_events(line)
+    assert event.item_type == expected_type
+
+
+def test_agy_extracts_changed_paths_from_various_parameter_keys() -> None:
+    for key in ("TargetFile", "target_file", "AbsolutePath", "file_path", "filePath", "path"):
+        line = json.dumps(
+            {
+                "event": "step_update",
+                "step_update": {
+                    "step_index": 2,
+                    "state": "ACTIVE",
+                    "step_type": "tool",
+                    "tool_name": "replace_file_content",
+                    "tool_info": {
+                        "name": "replace_file_content",
+                        "parameters": {key: "/repo/target.txt"},
+                    },
+                },
+            }
+        )
+        (event,) = agy.AgyAdapter().parse_events(line)
+        assert event.changed_paths == ("/repo/target.txt",)
