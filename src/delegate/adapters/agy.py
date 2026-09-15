@@ -25,18 +25,20 @@ class AgyAdapter:
         runs_commands: bool,
         allowed_read_roots: tuple[str, ...] = (),
     ) -> list[str]:
-        del project_root
+        del prompt_path
         del result_path
         del allowed_read_roots
 
-        prompt_text = prompt_path.read_text(encoding="utf-8")
         command = [
             "agy",
-            "-p",
-            prompt_text,
+            "--input-format",
+            "text",
             "--output-format",
             "stream-json",
             "--dangerously-skip-permissions",
+            "--disable-slash-commands",
+            "--add-dir",
+            str(project_root),
         ]
 
         if model:
@@ -107,16 +109,32 @@ class AgyAdapter:
             kind = "item_started" if state == "ACTIVE" else "item_completed"
             changed_paths: tuple[str, ...] = ()
             text = None
+            item_type = step_type if isinstance(step_type, str) else None
 
             if step_type == "tool":
+                tool_name = step.get("tool_name", "")
+                if tool_name == "run_command":
+                    item_type = "command_execution"
+                elif tool_name == "search_web":
+                    item_type = "web_search"
+                else:
+                    item_type = "dynamic_tool_call"
+
                 tool_info = step.get("tool_info")
                 if isinstance(tool_info, dict):
                     params = tool_info.get("parameters")
                     if isinstance(params, dict):
-                        target = params.get("TargetFile") or params.get("target_file")
+                        target = (
+                            params.get("TargetFile")
+                            or params.get("target_file")
+                            or params.get("AbsolutePath")
+                            or params.get("file_path")
+                            or params.get("filePath")
+                            or params.get("path")
+                        )
                         if isinstance(target, str):
                             changed_paths = (target,)
-                text = step.get("tool_name")
+                text = tool_name
             elif step_type == "agent_response":
                 text = step.get("text_delta")
 
@@ -124,7 +142,7 @@ class AgyAdapter:
                 NormalizedEvent(
                     kind=kind,
                     item_id=step_index,
-                    item_type=step_type if isinstance(step_type, str) else None,
+                    item_type=item_type,
                     text=text if isinstance(text, str) else None,
                     changed_paths=changed_paths,
                 )
