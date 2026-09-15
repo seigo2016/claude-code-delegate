@@ -444,9 +444,7 @@ def test_agy_command_reads_from_stdin_and_pins_directory(tmp_path: Path) -> None
         ("view_file", "dynamic_tool_call"),
     ],
 )
-def test_agy_maps_tool_names_to_stallable_item_types(
-    tool_name: str, expected_type: str
-) -> None:
+def test_agy_maps_tool_names_to_stallable_item_types(tool_name: str, expected_type: str) -> None:
     line = json.dumps(
         {
             "event": "step_update",
@@ -481,4 +479,3 @@ def test_agy_extracts_changed_paths_from_various_parameter_keys() -> None:
         )
         (event,) = agy.AgyAdapter().parse_events(line)
         assert event.changed_paths == ("/repo/target.txt",)
-
