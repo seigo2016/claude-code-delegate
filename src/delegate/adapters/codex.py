@@ -46,8 +46,10 @@ class CodexAdapter:
         writes_allowed: bool,
         runs_commands: bool,
         allowed_read_roots: tuple[str, ...] = (),
+        timeout_sec: int = 1800,
     ) -> list[str]:
         del allowed_read_roots
+        del timeout_sec
         # What keeps a role that runs commands off the repository is the scope check
         # afterwards, not the sandbox.
         writable = writes_allowed or runs_commands

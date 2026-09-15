@@ -1,6 +1,6 @@
 [project]
 name = "claude-code-delegate"
-version = "0.2.0"
+version = "0.2.1"
 description = "Asynchronous, auditable delegation from Claude Code to external CLI agents."
 readme = "README.md"
 requires-python = ">=3.11"

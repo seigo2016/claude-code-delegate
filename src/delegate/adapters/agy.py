@@ -24,6 +24,7 @@ class AgyAdapter:
         writes_allowed: bool,
         runs_commands: bool,
         allowed_read_roots: tuple[str, ...] = (),
+        timeout_sec: int = 1800,
     ) -> list[str]:
         del prompt_path
         del result_path
@@ -40,6 +41,9 @@ class AgyAdapter:
             "--add-dir",
             str(project_root),
         ]
+
+        if timeout_sec > 0:
+            command.extend(["--print-timeout", f"{timeout_sec}s"])
 
         if model:
             command.extend(["--model", model])
@@ -151,5 +155,8 @@ class AgyAdapter:
         return []
 
     def parse_stderr_lines(self, raw_line: str) -> list[NormalizedEvent]:
-        del raw_line
+        if "No capacity available" in raw_line or "UNAVAILABLE (code 503)" in raw_line:
+            return [NormalizedEvent(kind="runtime_warning", text="provider_capacity")]
+        if "print timeout after" in raw_line:
+            return [NormalizedEvent(kind="runtime_warning", text="print_timeout")]
         return []

@@ -122,3 +122,13 @@ def test_an_unusable_final_message_does_not_claim_the_work_finished() -> None:
     )
 
     assert diagnose.classify_timeout(view) == "event_stream_stall"
+
+
+def test_known_failures_are_classified() -> None:
+    view = fold(NormalizedEvent(kind="runtime_warning", text="provider_capacity"))
+    assert diagnose.classify_failure(view) == "provider_capacity"
+    assert diagnose.classify_timeout(view) == "provider_capacity"
+
+    view_timeout = fold(NormalizedEvent(kind="runtime_warning", text="print_timeout"))
+    assert diagnose.classify_failure(view_timeout) == "print_timeout"
+    assert diagnose.classify_timeout(view_timeout) == "print_timeout"

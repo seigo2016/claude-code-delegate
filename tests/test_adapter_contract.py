@@ -189,6 +189,7 @@ def build(
     writes_allowed: bool,
     runs_commands: bool = False,
     allowed_read_roots: tuple[str, ...] = (),
+    timeout_sec: int = 1800,
 ) -> list[str]:
     prompt = tmp_path / "prompt.md"
     prompt.write_text("do the thing", encoding="utf-8")
@@ -202,6 +203,7 @@ def build(
         writes_allowed=writes_allowed,
         runs_commands=runs_commands,
         allowed_read_roots=allowed_read_roots,
+        timeout_sec=timeout_sec,
     )
 
 
@@ -429,10 +431,11 @@ def test_claude_reports_whether_a_tool_completed_successfully() -> None:
 
 
 def test_agy_command_reads_from_stdin_and_pins_directory(tmp_path: Path) -> None:
-    command = build(SAMPLES["agy"], tmp_path, writes_allowed=True)
+    command = build(SAMPLES["agy"], tmp_path, writes_allowed=True, timeout_sec=600)
     assert contains(command, ("--input-format", "text"))
     assert contains(command, ("--disable-slash-commands",))
     assert contains(command, ("--add-dir", str(tmp_path)))
+    assert contains(command, ("--print-timeout", "600s"))
     assert "do the thing" not in command
 
 
@@ -479,3 +482,20 @@ def test_agy_extracts_changed_paths_from_various_parameter_keys() -> None:
         )
         (event,) = agy.AgyAdapter().parse_events(line)
         assert event.changed_paths == ("/repo/target.txt",)
+
+
+def test_agy_parses_stderr_capacity_and_timeout_errors() -> None:
+    adapter = agy.AgyAdapter()
+
+    capacity_503 = (
+        "API error (attempt 1): UNAVAILABLE (code 503): "
+        "No capacity available for model gemini-3.8-flash-high on the server"
+    )
+    (event_503,) = adapter.parse_stderr_lines(capacity_503)
+    assert event_503.kind == "runtime_warning"
+    assert event_503.text == "provider_capacity"
+
+    print_timeout = "[agy] print timeout after 5m0s with turn in progress; returning partial output"
+    (event_timeout,) = adapter.parse_stderr_lines(print_timeout)
+    assert event_timeout.kind == "runtime_warning"
+    assert event_timeout.text == "print_timeout"

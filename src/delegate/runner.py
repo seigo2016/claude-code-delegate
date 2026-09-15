@@ -123,6 +123,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             writes_allowed=bool(state["writes_allowed"]),
             runs_commands=bool(state["runs_commands"]),
             allowed_read_roots=tuple(state["allowed_read_roots"]),
+            timeout_sec=int(state.get("timeout_sec", 1800)),
         )
 
         cancelled = False
@@ -280,18 +281,28 @@ def _finish(
             **fields,
         )
         return
+    failure = diagnose.classify_failure(view)
+    failure_field = {"failure_class": failure} if failure is not None else {}
+
     if fields["exit_code"] != 0:
         events.emit(
             task_dir,
             "failed",
             terminal_reason="nonzero_exit",
+            **failure_field,
             **_keep_last_message(task_dir, view),
             **fields,
         )
         return
 
     if fields.get("unauthorized_writes"):
-        events.emit(task_dir, "failed", terminal_reason="write_scope_violation", **fields)
+        events.emit(
+            task_dir,
+            "failed",
+            terminal_reason="write_scope_violation",
+            **failure_field,
+            **fields,
+        )
         return
 
     result, source = _result_of(state, view)
@@ -300,6 +311,7 @@ def _finish(
             task_dir,
             "failed",
             terminal_reason="empty_result",
+            **failure_field,
             **_keep_last_message(task_dir, view),
             **fields,
         )
@@ -314,6 +326,7 @@ def _finish(
             "failed",
             terminal_reason="invalid_result",
             result_problems=problems,
+            **failure_field,
             **_keep_last_message(task_dir, view),
             **fields,
         )
