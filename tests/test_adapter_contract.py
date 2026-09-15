@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from delegate.adapters import claude, codex, opencode
+from delegate.adapters import agy, claude, codex, opencode
 from delegate.adapters.base import WorkerAdapter
 
 FINAL = json.dumps(
@@ -102,6 +102,34 @@ SAMPLES = {
         ),
         tool_started_line=None,
         read_only_flags=("--disallowed-tools", "Edit", "Write", "NotebookEdit"),
+    ),
+    "agy": Sample(
+        adapter=agy.AgyAdapter(),
+        session_line=json.dumps({"event": "init", "conversation_id": "c8aae049", "init": {}}),
+        session_id="c8aae049",
+        final_line=json.dumps(
+            {
+                "event": "result",
+                "result": {
+                    "conversation_id": "c8aae049",
+                    "status": "SUCCESS",
+                    "response": FINAL,
+                },
+            }
+        ),
+        tool_started_line=json.dumps(
+            {
+                "event": "step_update",
+                "step_update": {
+                    "conversation_id": "c8aae049",
+                    "step_index": 2,
+                    "state": "ACTIVE",
+                    "step_type": "tool",
+                    "tool_name": "run_command",
+                },
+            }
+        ),
+        read_only_flags=("--mode", "plan"),
     ),
 }
 
@@ -352,8 +380,26 @@ def test_a_run_that_was_refused_things_says_so(sample: Sample) -> None:
                 }
             ),
         ),
+        (
+            agy.AgyAdapter(),
+            json.dumps(
+                {
+                    "event": "step_update",
+                    "step_update": {
+                        "step_index": 2,
+                        "state": "ACTIVE",
+                        "step_type": "tool",
+                        "tool_name": "write_to_file",
+                        "tool_info": {
+                            "name": "write_to_file",
+                            "parameters": {"TargetFile": "/repo/changed.txt"},
+                        },
+                    },
+                }
+            ),
+        ),
     ],
-    ids=("codex", "opencode", "claude", "claude-notebook"),
+    ids=("codex", "opencode", "claude", "claude-notebook", "agy"),
 )
 def test_an_explicit_file_change_carries_its_path(adapter: WorkerAdapter, line: str) -> None:
     events = adapter.parse_events(line)
