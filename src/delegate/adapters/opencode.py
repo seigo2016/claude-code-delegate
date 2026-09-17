@@ -57,9 +57,11 @@ class OpenCodeAdapter:
         writes_allowed: bool,
         runs_commands: bool,
         allowed_read_roots: tuple[str, ...] = (),
+        allowed_write_roots: tuple[str, ...] = (),
         timeout_sec: int = 1800,
     ) -> list[str]:
         del timeout_sec
+        del allowed_write_roots
         read_only = not writes_allowed and not runs_commands
         command = ["opencode"]
         if read_only:

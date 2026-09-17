@@ -37,9 +37,11 @@ class ClaudeAdapter:
         writes_allowed: bool,
         runs_commands: bool,
         allowed_read_roots: tuple[str, ...] = (),
+        allowed_write_roots: tuple[str, ...] = (),
         timeout_sec: int = 1800,
     ) -> list[str]:
         del allowed_read_roots
+        del allowed_write_roots
         del timeout_sec
         # Nothing here stands on a filesystem the way codex does, so running commands
         # costs nothing to allow and buys no editing tools.

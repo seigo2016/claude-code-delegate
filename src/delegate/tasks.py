@@ -78,12 +78,19 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     lines.extend(f"- {item}" for item in value["read"] or ["- nothing specified"])
     lines.append("You may write only:")
     lines.extend(f"- {item}" for item in value["allowed_writes"] or ["nothing"])
+    if plan.role.allowed_write_roots:
+        lines.append("External write roots allowed by this role:")
+        lines.extend(f"- {root}" for root in plan.role.allowed_write_roots)
+        lines.append(
+            "Do not write inside the repository. External writes are allowed only below "
+            "the roots above."
+        )
     if value["allowed_writes"]:
         lines.append(
             "Write only to the canonical repository-relative paths listed above. "
             "Do not write a similarly named file elsewhere."
         )
-    else:
+    elif not plan.role.allowed_write_roots:
         lines.append(
             "This is a read-only task. Do not invoke write, edit, or patch tools; "
             "do not create files in .claude, /tmp, or elsewhere."
@@ -254,6 +261,7 @@ def submit(
         "writes_allowed": bool(value["allowed_writes"]),
         "runs_commands": plan.role.runs_commands,
         "allowed_read_roots": list(plan.role.allowed_read_roots),
+        "allowed_write_roots": list(plan.role.allowed_write_roots),
         "timeout_sec": plan.timeout,
         "pid": None,
         "session_id": None,

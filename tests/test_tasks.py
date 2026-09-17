@@ -57,6 +57,26 @@ def test_a_read_only_prompt_forbids_scratch_writes_as_well_as_repository_edits(
     assert "write it to a file" not in prompt
 
 
+def test_external_write_root_replaces_the_read_only_instruction(tmp_path: Path) -> None:
+    role = config.Role(
+        name="repro-runner",
+        level="standard",
+        runs_commands=True,
+        allowed_write_roots=("/mnt/f/irop-scene-reliability",),
+    )
+    prompt = tasks.compose_prompt(
+        tmp_path,
+        config.Plan(
+            role=role, worker="codex", adapter="codex", model="m", effort="high", timeout=60
+        ),
+        packet(),
+    )
+
+    assert "External write roots allowed by this role:" in prompt
+    assert "/mnt/f/irop-scene-reliability" in prompt
+    assert "This is a read-only task." not in prompt
+
+
 def test_a_writable_prompt_requires_exact_repository_relative_paths(tmp_path: Path) -> None:
     prompt = tasks.compose_prompt(
         tmp_path,

@@ -28,6 +28,7 @@ class Role:
     forbids_allowed_writes: bool = False
     repo_local_reads: bool = False
     allowed_read_roots: tuple[str, ...] = ()
+    allowed_write_roots: tuple[str, ...] = ()
     #: A build or a test suite writes outside the repository whether or not the task
     #: may change it, so this is separate from the write scope.
     runs_commands: bool = False
@@ -127,6 +128,15 @@ def _allowed_read_roots(body: dict[str, Any], where: str) -> tuple[str, ...]:
     return tuple(values)
 
 
+def _allowed_write_roots(body: dict[str, Any], where: str) -> tuple[str, ...]:
+    values = body.get("allowed_write_roots", [])
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise ConfigError(f"{where}.allowed_write_roots must be an array of absolute paths")
+    if any(not Path(value).is_absolute() for value in values):
+        raise ConfigError(f"{where}.allowed_write_roots must contain absolute paths")
+    return tuple(values)
+
+
 def load(path: Path) -> Settings:
     with path.open("rb") as handle:
         try:
@@ -139,6 +149,7 @@ def load(path: Path) -> Settings:
         where = f"roles.{name}"
         repo_local_reads = bool(body.get("repo_local_reads", False))
         allowed_read_roots = _allowed_read_roots(body, where)
+        allowed_write_roots = _allowed_write_roots(body, where)
         if allowed_read_roots and not repo_local_reads:
             raise ConfigError(f"{where}.allowed_read_roots requires repo_local_reads = true")
         roles[name] = Role(
@@ -149,6 +160,7 @@ def load(path: Path) -> Settings:
             forbids_allowed_writes=bool(body.get("forbids_allowed_writes", False)),
             repo_local_reads=repo_local_reads,
             allowed_read_roots=allowed_read_roots,
+            allowed_write_roots=allowed_write_roots,
             runs_commands=bool(body.get("runs_commands", False)),
         )
     workers = {

@@ -37,11 +37,13 @@ class AgyAdapter:
         writes_allowed: bool,
         runs_commands: bool,
         allowed_read_roots: tuple[str, ...] = (),
+        allowed_write_roots: tuple[str, ...] = (),
         timeout_sec: int = 1800,
     ) -> list[str]:
         del prompt_path
         del result_path
         del allowed_read_roots
+        del allowed_write_roots
 
         command = [
             "agy",

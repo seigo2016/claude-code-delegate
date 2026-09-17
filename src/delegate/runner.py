@@ -123,6 +123,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             writes_allowed=bool(state["writes_allowed"]),
             runs_commands=bool(state["runs_commands"]),
             allowed_read_roots=tuple(state["allowed_read_roots"]),
+            allowed_write_roots=tuple(state.get("allowed_write_roots", ())),
             timeout_sec=int(state.get("timeout_sec", 1800)),
         )
 
