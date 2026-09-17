@@ -8,6 +8,19 @@ from typing import Any
 
 from delegate.adapters.base import NormalizedEvent
 
+WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        "write_to_file",
+        "replace_file_content",
+        "write_file",
+        "edit_file",
+        "apply_patch",
+        "write",
+        "edit",
+        "patch",
+    }
+)
+
 
 class AgyAdapter:
     name = "agy"
@@ -116,7 +129,12 @@ class AgyAdapter:
             item_type = step_type if isinstance(step_type, str) else None
 
             if step_type == "tool":
-                tool_name = step.get("tool_name", "")
+                tool_name = step.get("tool_name")
+                tool_info = step.get("tool_info")
+                if not isinstance(tool_name, str) and isinstance(tool_info, dict):
+                    tool_name = tool_info.get("name")
+                tool_name = tool_name if isinstance(tool_name, str) else ""
+
                 if tool_name == "run_command":
                     item_type = "command_execution"
                 elif tool_name == "search_web":
@@ -124,8 +142,7 @@ class AgyAdapter:
                 else:
                     item_type = "dynamic_tool_call"
 
-                tool_info = step.get("tool_info")
-                if isinstance(tool_info, dict):
+                if tool_name.lower() in WRITE_TOOLS and isinstance(tool_info, dict):
                     params = tool_info.get("parameters")
                     if isinstance(params, dict):
                         target = (

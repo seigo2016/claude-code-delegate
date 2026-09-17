@@ -484,6 +484,52 @@ def test_agy_extracts_changed_paths_from_various_parameter_keys() -> None:
         assert event.changed_paths == ("/repo/target.txt",)
 
 
+def test_agy_does_not_treat_view_file_or_read_tools_as_changed_paths() -> None:
+    for tool_name, params in (
+        ("view_file", {"AbsolutePath": "/repo/viewed.txt"}),
+        ("grep_search", {"SearchPath": "/repo", "Query": "needle"}),
+        ("find_by_name", {"SearchDirectory": "/repo", "Pattern": "*.py"}),
+        ("list_dir", {"DirectoryPath": "/repo"}),
+    ):
+        for state in ("ACTIVE", "DONE"):
+            line = json.dumps(
+                {
+                    "event": "step_update",
+                    "step_update": {
+                        "step_index": 2,
+                        "state": state,
+                        "step_type": "tool",
+                        "tool_name": tool_name,
+                        "tool_info": {
+                            "name": tool_name,
+                            "parameters": params,
+                        },
+                    },
+                }
+            )
+            (event,) = agy.AgyAdapter().parse_events(line)
+            assert event.changed_paths == ()
+
+
+def test_agy_extracts_changed_paths_when_tool_name_only_in_tool_info() -> None:
+    line = json.dumps(
+        {
+            "event": "step_update",
+            "step_update": {
+                "step_index": 2,
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_info": {
+                    "name": "write_to_file",
+                    "parameters": {"TargetFile": "/repo/target.txt"},
+                },
+            },
+        }
+    )
+    (event,) = agy.AgyAdapter().parse_events(line)
+    assert event.changed_paths == ("/repo/target.txt",)
+
+
 def test_agy_parses_stderr_capacity_and_timeout_errors() -> None:
     adapter = agy.AgyAdapter()
 
