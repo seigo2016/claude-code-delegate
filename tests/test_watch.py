@@ -18,8 +18,10 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from conftest import Workspace
-from delegate import liveness
+from delegate import cli, events, liveness, store, tasks
 
 WAKE = 2
 QUIET = 0
@@ -223,6 +225,62 @@ def test_collect_rearms_the_remaining_tasks_when_its_output_is_filtered(
     assert result.returncode == WAKE
     assert result.stdout is not None
     assert json.loads(result.stdout.read())["ready"][0]["task_id"] == first["task_id"]
+
+
+@pytest.mark.parametrize("terminal_status", sorted(events.TERMINAL_STATES))
+def test_completion_between_notification_and_pruning_is_rearmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_status: str
+) -> None:
+    monkeypatch.setenv("DELEGATE_WATCH_ROOT", str(tmp_path / "registry"))
+    monkeypatch.setenv("DELEGATE_WATCH_SEC", "0")
+    watched = [(tmp_path, "first"), (tmp_path, "second")]
+    for root, task_id in watched:
+        task_dir = tasks.task_root(root) / task_id
+        store.write_json(
+            task_dir / "state.json",
+            {
+                "project_root": str(root),
+                "task_id": task_id,
+                "task_dir": str(task_dir),
+                "lock_path": str(task_dir / "worker.lock"),
+                "title": task_id,
+                "role": "repro-runner",
+                "status": "completed" if task_id == "first" else "running",
+                "delivered_at": None,
+            },
+        )
+    cli._remember_session_watch_group("session-1", watched)
+    notifications = []
+    second_path = tasks.task_root(tmp_path) / "second" / "state.json"
+
+    def notify(value: dict[str, object]) -> None:
+        notifications.append(value)
+        state = store.read_json(second_path)
+        state["status"] = terminal_status
+        store.write_json(second_path, state)
+
+    monkeypatch.setattr(cli, "_print", notify)
+    with liveness.hold(tasks.task_root(tmp_path) / "second" / "worker.lock"):
+        assert cli._watch_tasks(watched) == WAKE
+    assert [item["task_id"] for item in notifications[0]["ready"]] == ["first"]
+    cli._prune_session_watches("session-1")
+
+    first_path = tasks.task_root(tmp_path) / "first" / "state.json"
+    first_state = store.read_json(first_path)
+    first_state["delivered_at"] = "2026-09-17T00:00:00+00:00"
+    store.write_json(first_path, first_state)
+    cli._prune_session_watches("session-1")
+    remaining = cli._read_session_watches("session-1")
+    assert remaining == [{"project_root": str(tmp_path), "task_id": "second"}]
+    assert cli._watch_tasks(cli._watch_tasks_from_handles(remaining)) == WAKE
+    assert [item["task_id"] for item in notifications[-1]["ready"]] == ["second"]
+
+    state = store.read_json(second_path)
+    state["delivered_at"] = "2026-09-17T00:01:00+00:00"
+    store.write_json(second_path, state)
+    cli._prune_session_watches("session-1")
+    assert cli._read_session_watches("session-1") == []
+    assert list(cli._watch_registry_dir("session-1").glob("*.json")) == []
 
 
 def test_the_hook_ignores_json_that_does_not_name_a_task(

@@ -311,15 +311,15 @@ def _prune_session_watches(session_id: str) -> None:
         except (KeyError, OSError, ValueError, json.JSONDecodeError):
             path.unlink(missing_ok=True)
             continue
-        active = _active_session_watches(watches)
-        if active:
+        pending = _pending_session_watches(watches)
+        if pending:
             store.write_json(
                 path,
                 {
                     "session_id": session_id,
                     "watch_tasks": [
                         {"project_root": str(project_root), "task_id": task_id}
-                        for project_root, task_id in active
+                        for project_root, task_id in pending
                     ],
                 },
             )
@@ -345,17 +345,19 @@ def _watch_tasks_from_handles(handles: list[dict[str, Any]]) -> list[tuple[Path,
     return watched
 
 
-def _active_session_watches(watched: list[tuple[Path, str]]) -> list[tuple[Path, str]]:
-    active = []
+def _pending_session_watches(watched: list[tuple[Path, str]]) -> list[tuple[Path, str]]:
+    pending = []
     for project_root, task_id in watched:
         try:
             _, state = _load_task(project_root, task_id)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
         state = _reconcile_state(state)
-        if state["status"] in events.ACTIVE_STATES:
-            active.append((project_root, task_id))
-    return active
+        if state["status"] in events.ACTIVE_STATES or (
+            state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
+        ):
+            pending.append((project_root, task_id))
+    return pending
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
