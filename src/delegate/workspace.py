@@ -11,7 +11,34 @@ import subprocess
 from pathlib import Path
 
 # The task's own bookkeeping is not the worker's doing.
-IGNORED = (".claude/logs/",)
+IGNORED_PREFIXES = (
+    ".claude/logs/",
+    ".tmp/",
+    ".pytest_cache/",
+    ".ruff_cache/",
+    ".mypy_cache/",
+)
+IGNORED_SUBSTRINGS = (
+    "/__pycache__/",
+    "__pycache__/",
+    "/.pytest_cache/",
+    "/.ruff_cache/",
+    "/.mypy_cache/",
+)
+IGNORED_EXTENSIONS = (
+    ".pyc",
+    ".pyo",
+)
+
+
+def _is_ignored(path: str) -> bool:
+    if path.startswith(IGNORED_PREFIXES):
+        return True
+    if any(sub in path for sub in IGNORED_SUBSTRINGS):
+        return True
+    if path.endswith(IGNORED_EXTENSIONS):
+        return True
+    return False
 
 
 def changed_paths(project_root: Path) -> set[str] | None:
@@ -31,7 +58,7 @@ def changed_paths(project_root: Path) -> set[str] | None:
     return {
         entry[3:]
         for entry in result.stdout.split("\0")
-        if len(entry) > 3 and not entry[3:].startswith(IGNORED)
+        if len(entry) > 3 and not _is_ignored(entry[3:])
     }
 
 

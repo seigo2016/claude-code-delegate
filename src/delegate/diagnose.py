@@ -103,7 +103,7 @@ def has_usable_result(view: RunView) -> bool:
     if view.last_agent_message is None:
         return False
     parsed = envelope.from_text(view.last_agent_message)
-    return parsed is not None and envelope.violations(parsed) == []
+    return parsed is not None and envelope.violations(envelope.sanitize(parsed)) == []
 
 
 KNOWN_FAILURES = frozenset({"provider_capacity", "print_timeout", "model_refresh_timeout"})

@@ -78,3 +78,43 @@ def test_a_single_overlong_item_cannot_smuggle_a_report_past_the_item_cap() -> N
     assert envelope.violations(packed) == [
         f"observed_facts holds an item longer than {envelope.MAX_ITEM_CHARS} characters"
     ]
+
+
+def test_sanitize_truncates_overlong_items_and_caps_item_count() -> None:
+    overlong = "a" * (envelope.MAX_ITEM_CHARS + 50)
+    flooded = [f"item {i}: {overlong}" for i in range(envelope.MAX_ITEMS + 3)]
+    raw = {**valid(), "observed_facts": flooded}
+
+    cleaned = envelope.sanitize(raw)
+    assert len(cleaned["observed_facts"]) == envelope.MAX_ITEMS
+    for item in cleaned["observed_facts"]:
+        assert len(item) == envelope.MAX_ITEM_CHARS
+        assert item.endswith("...")
+    assert envelope.violations(cleaned) == []
+
+
+def test_sanitize_strips_unexpected_fields() -> None:
+    extra = {**valid(), "toolAction": "viewing", "toolSummary": "view", "reasoning": "thought"}
+    cleaned = envelope.sanitize(extra)
+    for unexpected in ("toolAction", "toolSummary", "reasoning"):
+        assert unexpected not in cleaned
+    assert envelope.violations(cleaned) == []
+
+
+def test_sanitize_defaults_blockers_and_decision_needed_on_completed() -> None:
+    partial = {
+        "status": "completed",
+        "observed_facts": ["fact 1"],
+        "verified_comparisons": ["comp 1"],
+        "artifact_paths": ["a.txt"],
+    }
+    cleaned = envelope.sanitize(partial)
+    assert cleaned["blockers"] == []
+    assert cleaned["decision_needed"] is None
+    assert envelope.violations(cleaned) == []
+
+
+def test_from_text_extracts_json_without_code_fence() -> None:
+    message = "I have launched the run and completed the task.\n" + json.dumps(valid())
+    assert envelope.from_text(message) == valid()
+

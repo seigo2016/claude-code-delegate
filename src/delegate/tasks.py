@@ -97,6 +97,9 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         )
     lines.append("Do not:")
     lines.extend(f"- {item}" for item in forbidden)
+    if plan.role.instructions:
+        lines.append("Role instructions:")
+        lines.append(plan.role.instructions.strip())
     lines.append("Bring back evidence for:")
     lines.extend(f"- {item}" for item in value["required_evidence"])
     lines.append("")
@@ -124,6 +127,8 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         "Before replying, check that the object has exactly these six keys and every list has "
         "at most five items. Consolidate related facts instead of adding a sixth item."
     )
+    lines.append("Do not include metadata keys (such as toolAction, toolSummary, reasoning) in the JSON object.")
+    lines.append("Do not preface the response with conversational text or status updates; reply with the JSON object directly.")
     lines.append("Cite exact paths. Do not paste raw logs.")
     return "\n".join(lines) + "\n"
 

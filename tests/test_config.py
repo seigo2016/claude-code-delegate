@@ -74,6 +74,21 @@ def test_a_role_may_carry_its_own_timeout(tmp_path: Path) -> None:
     assert load(tmp_path).plan("adversarial-critic").timeout == 3600
 
 
+def test_a_role_may_carry_instructions(tmp_path: Path) -> None:
+    settings_text = """
+    default_worker = "codex"
+    [workers.codex]
+    adapter = "codex"
+    enabled = true
+    light = { model = "luna", effort = "high" }
+    [roles.patcher]
+    level = "light"
+    instructions = "Check all inputs before run."
+    """
+    assert load(tmp_path, settings_text).plan("patcher").role.instructions == "Check all inputs before run."
+
+
+
 def test_an_unknown_role_is_named_in_the_error(tmp_path: Path) -> None:
     with pytest.raises(config.ConfigError, match="unknown role: reviewer"):
         load(tmp_path).plan("reviewer")

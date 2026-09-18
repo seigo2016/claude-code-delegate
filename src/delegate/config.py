@@ -32,6 +32,7 @@ class Role:
     #: A build or a test suite writes outside the repository whether or not the task
     #: may change it, so this is separate from the write scope.
     runs_commands: bool = False
+    instructions: str | None = None
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,7 @@ def load(path: Path) -> Settings:
             allowed_read_roots=allowed_read_roots,
             allowed_write_roots=allowed_write_roots,
             runs_commands=bool(body.get("runs_commands", False)),
+            instructions=str(body["instructions"]) if "instructions" in body else None,
         )
     workers = {
         name: Worker(

@@ -18,6 +18,48 @@ FIELDS = ("status", *EVIDENCE_FIELDS, "decision_needed")
 STATUSES = ("completed", "decision_needed")
 
 
+def sanitize(result: Any) -> Any:
+    """Coerce a near-valid envelope into shape where possible.
+
+    Workers (especially external models) often produce envelopes that are
+    semantically sound but violate syntactic bounds:
+    - Evidence items exceeding MAX_ITEM_CHARS (truncated with '...')
+    - Evidence lists exceeding MAX_ITEMS (truncated to MAX_ITEMS)
+    - Extraneous metadata keys (e.g. toolAction, toolSummary, reasoning)
+    - Missing 'decision_needed' or 'blockers' when status is 'completed'
+    """
+    if not isinstance(result, dict):
+        return result
+
+    cleaned: dict[str, Any] = {}
+
+    if "status" in result:
+        cleaned["status"] = result["status"]
+
+    for field in EVIDENCE_FIELDS:
+        if field in result:
+            val = result[field]
+            if isinstance(val, list):
+                items: list[Any] = []
+                for item in val[:MAX_ITEMS]:
+                    if isinstance(item, str):
+                        if len(item) > MAX_ITEM_CHARS:
+                            item = item[: MAX_ITEM_CHARS - 3] + "..."
+                    items.append(item)
+                cleaned[field] = items
+            else:
+                cleaned[field] = val
+        elif field == "blockers" and result.get("status") == "completed":
+            cleaned["blockers"] = []
+
+    if "decision_needed" in result:
+        cleaned["decision_needed"] = result["decision_needed"]
+    elif result.get("status") == "completed":
+        cleaned["decision_needed"] = None
+
+    return cleaned
+
+
 def violations(result: Any) -> list[str]:
     """Every reason ``result`` is not a valid envelope, in reading order."""
     if not isinstance(result, dict):
@@ -70,7 +112,27 @@ def from_text(text: str) -> dict[str, Any] | None:
             continue
         if isinstance(parsed, dict):
             return parsed
-    return None
+    return _extract_json_object(stripped)
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    """Find and parse a JSON object embedded in surrounding prose."""
+    decoder = json.JSONDecoder()
+    idx = 0
+    candidate: dict[str, Any] | None = None
+    while True:
+        pos = text.find("{", idx)
+        if pos == -1:
+            break
+        try:
+            obj, _ = decoder.raw_decode(text[pos:])
+            if isinstance(obj, dict):
+                if "status" in obj or any(f in obj for f in EVIDENCE_FIELDS):
+                    candidate = obj
+            idx = pos + 1
+        except json.JSONDecodeError:
+            idx = pos + 1
+    return candidate
 
 
 def _fenced(text: str) -> str | None:

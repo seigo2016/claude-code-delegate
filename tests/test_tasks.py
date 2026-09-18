@@ -95,6 +95,25 @@ def test_a_writable_prompt_requires_exact_repository_relative_paths(tmp_path: Pa
     assert "write it to a file you were allowed to write" in prompt
 
 
+def test_role_instructions_are_included_in_the_prompt(tmp_path: Path) -> None:
+    role = config.Role(
+        name="mechanical-patcher",
+        level="light",
+        instructions="Always run tests before finishing.",
+    )
+    prompt = tasks.compose_prompt(
+        tmp_path,
+        config.Plan(
+            role=role, worker="codex", adapter="codex", model="m", effort="high", timeout=60
+        ),
+        packet(),
+    )
+
+    assert "Role instructions:" in prompt
+    assert "Always run tests before finishing." in prompt
+
+
+
 def packet(**updates: object) -> dict[str, object]:
     value: dict[str, object] = {
         "objective": "Inspect something.",

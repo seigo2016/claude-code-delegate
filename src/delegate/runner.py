@@ -60,7 +60,9 @@ def _keep_last_message(task_dir: Path, view: diagnose.RunView) -> dict[str, Any]
     }
     if diagnose.has_usable_result(view):
         recovered = task_dir / "recovered-result.json"
-        store.write_json(recovered, envelope.from_text(view.last_agent_message) or {})
+        raw_result = envelope.from_text(view.last_agent_message)
+        sanitized = envelope.sanitize(raw_result) if raw_result is not None else {}
+        store.write_json(recovered, sanitized)
         fields["recovery_status"] = "usable"
         fields["recovered_result_path"] = str(recovered)
     return fields
@@ -317,9 +319,9 @@ def _finish(
             **fields,
         )
         return
-    if source == "final_message":
-        # So that a reader of the task finds the result in one place either way.
-        store.write_json(Path(state["result_path"]), result)
+    result = envelope.sanitize(result)
+    # So that a reader of the task finds the sanitized result in one place either way.
+    store.write_json(Path(state["result_path"]), result)
     problems = envelope.violations(result)
     if problems:
         events.emit(
