@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
 
 from delegate import config, envelope, tasks
+
+
+@pytest.fixture(autouse=True)
+def _worker_binaries_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unit tests exercise validation, not the ambient PATH.
+
+    Without this, submit success paths would depend on whether the four
+    worker binaries happen to be installed where the tests run.
+    """
+    monkeypatch.setattr(shutil, "which", lambda name, *args, **kwargs: f"/usr/bin/{name}")
 
 
 def plan() -> config.Plan:
@@ -111,7 +122,6 @@ def test_role_instructions_are_included_in_the_prompt(tmp_path: Path) -> None:
 
     assert "Role instructions:" in prompt
     assert "Always run tests before finishing." in prompt
-
 
 
 def packet(**updates: object) -> dict[str, object]:
@@ -248,3 +258,75 @@ def test_write_scope_must_be_repository_relative(tmp_path: Path, path: str) -> N
             title="patch",
             value=packet(allowed_writes=[path]),
         )
+
+
+def submit_with(role: config.Role, tmp_path: Path, **updates: object) -> dict[str, object]:
+    return tasks.submit(
+        project_root=tmp_path,
+        settings=settings(role),
+        role=role.name,
+        title="preflight",
+        value=packet(**updates),
+    )
+
+
+def test_a_missing_worker_binary_is_refused_before_a_task_is_made(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda *args, **kwargs: None)
+    role = config.Role(name="auditor", level="standard")
+
+    with pytest.raises(tasks.SubmitRefused, match="not on PATH"):
+        submit_with(role, tmp_path)
+
+
+def test_a_worker_without_a_model_for_the_level_is_refused(
+    tmp_path: Path,
+) -> None:
+    role = config.Role(name="auditor", level="standard")
+    empty = config.Settings(
+        roles={role.name: role},
+        workers={
+            "claude": config.Worker(
+                name="claude",
+                adapter="claude",
+                enabled=True,
+                levels={"standard": config.Level(model="", effort="high")},
+            )
+        },
+        default_worker="claude",
+    )
+
+    with pytest.raises(tasks.SubmitRefused, match="no model"):
+        tasks.submit(
+            project_root=tmp_path,
+            settings=empty,
+            role=role.name,
+            title="preflight",
+            value=packet(),
+        )
+
+
+def test_a_non_positive_timeout_is_refused(tmp_path: Path) -> None:
+    role = config.Role(name="auditor", level="standard", timeout=0)
+
+    with pytest.raises(tasks.SubmitRefused, match="timeout"):
+        submit_with(role, tmp_path)
+
+
+def test_a_missing_external_write_root_is_refused(tmp_path: Path) -> None:
+    missing = tmp_path / "no-such-mount"
+    role = config.Role(name="runner", level="standard", allowed_write_roots=(str(missing),))
+
+    with pytest.raises(tasks.SubmitRefused, match="allowed_write_roots"):
+        submit_with(role, tmp_path)
+
+
+def test_an_existing_external_write_root_passes_preflight(tmp_path: Path) -> None:
+    root = tmp_path / "mount"
+    root.mkdir()
+    role = config.Role(name="runner", level="standard", allowed_write_roots=(str(root),))
+
+    handle = submit_with(role, tmp_path)
+
+    assert handle["role"] == "runner"

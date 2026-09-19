@@ -85,8 +85,10 @@ def test_a_role_may_carry_instructions(tmp_path: Path) -> None:
     level = "light"
     instructions = "Check all inputs before run."
     """
-    assert load(tmp_path, settings_text).plan("patcher").role.instructions == "Check all inputs before run."
-
+    assert (
+        load(tmp_path, settings_text).plan("patcher").role.instructions
+        == "Check all inputs before run."
+    )
 
 
 def test_an_unknown_role_is_named_in_the_error(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import uuid
@@ -127,8 +128,14 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         "Before replying, check that the object has exactly these six keys and every list has "
         "at most five items. Consolidate related facts instead of adding a sixth item."
     )
-    lines.append("Do not include metadata keys (such as toolAction, toolSummary, reasoning) in the JSON object.")
-    lines.append("Do not preface the response with conversational text or status updates; reply with the JSON object directly.")
+    lines.append(
+        "Do not include metadata keys (such as toolAction, toolSummary, reasoning) "
+        "in the JSON object."
+    )
+    lines.append(
+        "Do not preface the response with conversational text or status updates; "
+        "reply with the JSON object directly."
+    )
     lines.append("Cite exact paths. Do not paste raw logs.")
     return "\n".join(lines) + "\n"
 
@@ -199,6 +206,27 @@ def _invalid_scoped_reads(values: list[str], role: config.Role) -> list[str]:
     return invalid
 
 
+def _preflight(plan: config.Plan, binary: str) -> None:
+    """Refuse work that cannot possibly run, in seconds rather than minutes.
+
+    Only checks that cannot be wrong are here: a missing binary, an empty
+    model, a non-positive timeout, and a configured write root that does not
+    exist. Everything else is the worker's to discover at run time.
+    """
+    if shutil.which(binary) is None:
+        raise SubmitRefused(f"worker binary not on PATH: {binary}")
+    if not plan.model:
+        raise SubmitRefused(f"worker {plan.worker} defines no model for level {plan.role.level}")
+    if plan.timeout <= 0:
+        raise SubmitRefused(f"role {plan.role.name} has a non-positive timeout: {plan.timeout}")
+    missing = [root for root in plan.role.allowed_write_roots if not Path(root).exists()]
+    if missing:
+        raise SubmitRefused(
+            "allowed_write_roots do not exist",
+            missing_allowed_write_roots=missing,
+        )
+
+
 def submit(
     *,
     project_root: Path,
@@ -233,9 +261,10 @@ def submit(
                 invalid_reads=invalid_reads,
             )
     try:
-        registry.get(plan.adapter)
+        adapter = registry.get(plan.adapter)
     except KeyError as error:
         raise SubmitRefused(str(error)) from error
+    _preflight(plan, adapter.name)
 
     root = task_root(project_root)
     root.mkdir(parents=True, exist_ok=True)

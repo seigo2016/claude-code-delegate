@@ -36,9 +36,7 @@ def _is_ignored(path: str) -> bool:
         return True
     if any(sub in path for sub in IGNORED_SUBSTRINGS):
         return True
-    if path.endswith(IGNORED_EXTENSIONS):
-        return True
-    return False
+    return bool(path.endswith(IGNORED_EXTENSIONS))
 
 
 def changed_paths(project_root: Path) -> set[str] | None:

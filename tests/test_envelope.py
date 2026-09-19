@@ -117,4 +117,3 @@ def test_sanitize_defaults_blockers_and_decision_needed_on_completed() -> None:
 def test_from_text_extracts_json_without_code_fence() -> None:
     message = "I have launched the run and completed the task.\n" + json.dumps(valid())
     assert envelope.from_text(message) == valid()
-

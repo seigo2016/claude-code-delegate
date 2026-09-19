@@ -28,18 +28,15 @@ def test_a_backend_that_does_not_exist_is_refused_before_a_task_is_made(
     assert not (workspace.repo / ".claude" / "logs" / "delegate").exists()
 
 
-def test_a_backend_that_cannot_be_launched_is_a_failure_not_a_disappearance(
+def test_a_backend_that_cannot_be_launched_is_refused_before_a_task_is_made(
     workspace: Workspace,
 ) -> None:
     workspace.remove_worker()
 
-    handle = workspace.submit()
+    refusal = workspace.submit()
 
-    from test_lifecycle import wait_for_terminal
-
-    state = wait_for_terminal(workspace, handle["task_id"])
-    assert state["status"] == "failed"
-    assert state["terminal_reason"] == "launch_error"
+    assert "codex" in refusal["error"]
+    assert not (workspace.repo / ".claude" / "logs" / "delegate").exists()
 
 
 def test_a_task_that_has_only_just_been_handed_over_is_not_declared_lost(

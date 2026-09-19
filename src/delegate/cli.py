@@ -93,7 +93,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
         return _fail("already_delivered", 3, delivered_at=state["delivered_at"])
 
     result: Any = None
-    if state["status"] in {"completed", "decision_needed"}:
+    if state["status"] in {"completed", "decision_needed"} or (
+        state["status"] == "degraded" and state.get("recovery_status") == "usable"
+    ):
         result = store.read_json(Path(state["result_path"]))
     state = events.emit(task_dir, state["status"], delivered_at=events.now_iso())
     delivery = {

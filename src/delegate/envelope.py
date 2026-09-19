@@ -42,9 +42,8 @@ def sanitize(result: Any) -> Any:
             if isinstance(val, list):
                 items: list[Any] = []
                 for item in val[:MAX_ITEMS]:
-                    if isinstance(item, str):
-                        if len(item) > MAX_ITEM_CHARS:
-                            item = item[: MAX_ITEM_CHARS - 3] + "..."
+                    if isinstance(item, str) and len(item) > MAX_ITEM_CHARS:
+                        item = item[: MAX_ITEM_CHARS - 3] + "..."
                     items.append(item)
                 cleaned[field] = items
             else:
@@ -126,9 +125,10 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
             break
         try:
             obj, _ = decoder.raw_decode(text[pos:])
-            if isinstance(obj, dict):
-                if "status" in obj or any(f in obj for f in EVIDENCE_FIELDS):
-                    candidate = obj
+            if isinstance(obj, dict) and (
+                "status" in obj or any(f in obj for f in EVIDENCE_FIELDS)
+            ):
+                candidate = obj
             idx = pos + 1
         except json.JSONDecodeError:
             idx = pos + 1

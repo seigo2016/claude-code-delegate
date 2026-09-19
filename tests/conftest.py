@@ -56,6 +56,9 @@ for i, arg in enumerate(args):
 def event(payload):
     print(json.dumps(payload), flush=True)
 
+if mode == "utterly_silent":
+    time.sleep(60)
+
 event({"type": "thread.started", "thread_id": "session-1"})
 
 if mode == "tool_hang":

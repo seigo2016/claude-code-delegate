@@ -148,7 +148,33 @@ def test_a_task_that_runs_out_of_time_records_where_it_stopped(workspace: Worksp
     assert state["failure_class"] == "tool_stall"
 
 
-def test_a_worker_that_finished_but_never_handed_back_a_result_is_named_as_such(
+def test_a_worker_that_never_speaks_is_stopped_before_its_deadline(
+    workspace: Workspace,
+) -> None:
+    workspace.mode("utterly_silent")
+    handle = workspace.submit(role="impatient")
+
+    state = wait_for_terminal(workspace, handle["task_id"])
+
+    assert state["status"] == "timeout"
+    assert state["failure_class"] == "wall_clock_timeout"
+    assert state["duration_sec"] < 1.0
+
+
+def test_a_worker_that_started_but_stalled_keeps_its_full_deadline(
+    workspace: Workspace,
+) -> None:
+    workspace.mode("silent_hang")
+    handle = workspace.submit(role="impatient")
+
+    state = wait_for_terminal(workspace, handle["task_id"])
+
+    assert state["status"] == "timeout"
+    assert state["failure_class"] == "event_stream_stall"
+    assert state["duration_sec"] >= 0.95
+
+
+def test_a_usable_result_left_by_a_timed_out_worker_is_collected_as_degraded(
     workspace: Workspace,
 ) -> None:
     workspace.mode("finalization_hang")
@@ -156,20 +182,22 @@ def test_a_worker_that_finished_but_never_handed_back_a_result_is_named_as_such(
 
     state = wait_for_terminal(workspace, handle["task_id"])
 
-    assert state["status"] == "timeout"
+    assert state["status"] == "degraded"
+    assert state["terminal_reason"] == "timeout_with_result"
     assert state["failure_class"] == "finalization_timeout"
     assert Path(state["recovered_result_path"]).exists(), "a usable final message is kept aside"
 
 
-def test_the_recovered_message_is_not_promoted_to_a_result(workspace: Workspace) -> None:
+def test_the_salvaged_result_is_delivered_on_collect(workspace: Workspace) -> None:
     workspace.mode("finalization_hang")
     handle = workspace.submit(role="impatient")
     wait_for_terminal(workspace, handle["task_id"])
 
-    envelope = workspace.run("collect", handle["task_id"])
+    delivery = workspace.run("collect", handle["task_id"])
 
-    assert envelope["status"] == "timeout"
-    assert envelope["result"] is None
+    assert delivery["status"] == "degraded"
+    assert delivery["result"]["observed_facts"] == ["the fake worker ran"]
+    assert delivery["recovery_status"] == "usable"
 
 
 def test_the_same_request_twice_while_it_is_running_reuses_the_first_task(

@@ -18,6 +18,22 @@ from delegate import diagnose, envelope, events, liveness, store, workspace
 from delegate.adapters import registry
 from delegate.adapters.base import WorkerAdapter
 
+#: A worker that never wrote a byte never did anything observable, so waiting
+#: out its whole deadline only delays the inevitable timeout. It is stopped
+#: once silent past this long, or past half its deadline for short tasks.
+SILENCE_LIMIT_SEC = 60.0
+
+
+def _worker_has_spoken(events_path: Path, stderr_path: Path) -> bool:
+    """Whether the worker wrote anything at all, on either stream.
+
+    Anything unreadable counts as spoken: silence must be certain to act on.
+    """
+    try:
+        return events_path.stat().st_size > 0 or stderr_path.stat().st_size > 0
+    except OSError:
+        return True
+
 
 class _Tail:
     """Reads a growing file forward only, in bytes so the offset means one thing."""
@@ -173,6 +189,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             stderr_tail = _Tail(stderr_path)
             heartbeat = max(float(os.environ.get("DELEGATE_HEARTBEAT_SEC", "5")), 0.01)
             deadline = started + float(state["timeout_sec"])
+            silence_limit = min(SILENCE_LIMIT_SEC, float(state["timeout_sec"]) / 2)
             next_beat = time.monotonic()
 
             while process.poll() is None:
@@ -184,6 +201,12 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                 if now >= deadline:
                     timed_out = True
                     _terminate(process)
+                    break
+                if now - started >= silence_limit and not _worker_has_spoken(
+                    events_path, stderr_path
+                ):
+                    _terminate(process)
+                    timed_out = True
                     break
                 if now >= next_beat:
                     view = _absorb(view, adapter, event_tail, stderr_tail)
@@ -247,6 +270,19 @@ def _absorb(
     return view
 
 
+def _salvaged_result(view: diagnose.RunView) -> dict[str, Any] | None:
+    """A result worth delivering despite the timeout, if the worker left one.
+
+    The worker finished its turn but never handed the result back through the
+    file it was given. Promoting the message is only honest when it already
+    satisfies the contract; anything else stays a timeout.
+    """
+    if not diagnose.has_usable_result(view):
+        return None
+    parsed = envelope.from_text(view.last_agent_message or "")
+    return envelope.sanitize(parsed) if parsed is not None else None
+
+
 def _result_of(state: dict[str, Any], view: diagnose.RunView) -> tuple[dict[str, Any] | None, str]:
     """The result the worker produced, from a file if it can write one, else from
     its last message. ``None`` means it produced nothing to judge."""
@@ -275,6 +311,18 @@ def _finish(
         events.emit(task_dir, "cancelled", terminal_reason="cancelled", **fields)
         return
     if timed_out:
+        salvaged = _salvaged_result(view)
+        if salvaged is not None:
+            store.write_json(Path(state["result_path"]), salvaged)
+            events.emit(
+                task_dir,
+                "degraded",
+                terminal_reason="timeout_with_result",
+                failure_class=diagnose.classify_timeout(view),
+                **_keep_last_message(task_dir, view),
+                **fields,
+            )
+            return
         events.emit(
             task_dir,
             "timeout",
