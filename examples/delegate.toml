@@ -37,6 +37,12 @@ frontier = { model = "opus", effort = "xhigh" }
 #
 # A role asks for a level, never a model, so the same roles work whichever
 # worker you enabled above.
+#
+# `preferred_worker` selects an enabled worker for this role unless the caller
+# supplies `--worker`. `allowed_escalation_reasons` requires a packet field of
+# the same name, chosen from its list. `requires_explicit_user_direction = true`
+# requires `user_directed = true` in the packet. These are optional policy
+# fields; leave them unset for roles that do not need them.
 
 [roles.artifact-auditor]
 level = "standard"

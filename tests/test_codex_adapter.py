@@ -39,6 +39,7 @@ def test_the_command_pins_the_root_the_result_contract_and_full_reasoning(tmp_pa
 
 
 def test_external_write_roots_are_added_to_the_codex_sandbox(tmp_path: Path) -> None:
+    external_root = tmp_path / "external-output"
     command = ADAPTER.build_command(
         project_root=tmp_path,
         prompt_path=tmp_path / "prompt.md",
@@ -48,11 +49,11 @@ def test_external_write_roots_are_added_to_the_codex_sandbox(tmp_path: Path) -> 
         effort="high",
         writes_allowed=False,
         runs_commands=True,
-        allowed_write_roots=("/mnt/f/irop-scene-reliability",),
+        allowed_write_roots=(str(external_root),),
     )
 
     setting = next(
         value for value in command if value.startswith("sandbox_workspace_write.writable_roots=")
     )
     roots = json.loads(setting.split("=", 1)[1])
-    assert "/mnt/f/irop-scene-reliability" in roots
+    assert str(external_root) in roots

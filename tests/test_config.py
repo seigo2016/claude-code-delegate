@@ -70,6 +70,54 @@ def test_the_same_role_resolves_differently_on_another_worker(tmp_path: Path) ->
     assert (plan.worker, plan.model, plan.effort) == ("opencode", "kimi", "high")
 
 
+def test_a_role_prefers_its_configured_worker_when_cli_worker_is_absent(tmp_path: Path) -> None:
+    text = SETTINGS.replace(
+        'level = "standard"\nforbids_allowed_writes',
+        'level = "standard"\npreferred_worker = "opencode"\nforbids_allowed_writes',
+        1,
+    )
+
+    plan = load(tmp_path, text).plan("artifact-auditor")
+
+    assert (plan.worker, plan.model) == ("opencode", "kimi")
+
+
+def test_an_explicit_worker_overrides_a_role_preferred_worker(tmp_path: Path) -> None:
+    text = SETTINGS.replace(
+        'level = "standard"\nforbids_allowed_writes',
+        'level = "standard"\npreferred_worker = "opencode"\nforbids_allowed_writes',
+        1,
+    )
+
+    plan = load(tmp_path, text).plan("artifact-auditor", worker="codex")
+
+    assert (plan.worker, plan.model) == ("codex", "terra")
+
+
+def test_a_role_with_an_unknown_preferred_worker_is_refused(tmp_path: Path) -> None:
+    text = SETTINGS.replace(
+        'level = "standard"\nforbids_allowed_writes',
+        'level = "standard"\npreferred_worker = "unknown"\nforbids_allowed_writes',
+        1,
+    )
+
+    with pytest.raises(config.ConfigError, match="preferred_worker unknown"):
+        load(tmp_path, text).plan("artifact-auditor")
+
+
+def test_a_role_parses_generic_policy_constraints(tmp_path: Path) -> None:
+    text = SETTINGS.replace(
+        'level = "frontier"\ntimeout = 3600',
+        'level = "frontier"\nallowed_escalation_reasons = ["contradictory-evidence"]\n'
+        "requires_explicit_user_direction = true\ntimeout = 3600",
+    )
+
+    role = load(tmp_path, text).roles["adversarial-critic"]
+
+    assert role.allowed_escalation_reasons == ("contradictory-evidence",)
+    assert role.requires_explicit_user_direction is True
+
+
 def test_a_role_may_carry_its_own_timeout(tmp_path: Path) -> None:
     assert load(tmp_path).plan("adversarial-critic").timeout == 3600
 

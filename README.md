@@ -71,9 +71,17 @@ until you declare one.
 ## Configuration
 
 A role asks for a level, never a model, and each worker says what that level
-means for itself. The same roles therefore work whichever backend is configured,
-and `--worker` picks one per task. A role asking for a level the chosen worker
-does not define is refused before anything starts.
+means for itself. A role may also name `preferred_worker`. Worker selection is,
+in order: `--worker`, the role's `preferred_worker`, then `default_worker`. A
+role asking for a level the chosen worker does not define is refused before
+anything starts.
+
+A role may limit escalation with `allowed_escalation_reasons`. When it does,
+the packet must give an `escalation_reason` from that list. A role with
+`requires_explicit_user_direction = true` also requires
+`"user_directed": true` in the packet. Both declarations are recorded with the
+task for audit; `user_directed` records the caller's declaration and does not
+prove that a person gave the instruction.
 
 | adapter | driven by | answers with |
 |---|---|---|
@@ -95,6 +103,15 @@ written, and what evidence to bring back:
   "allowed_writes": [],
   "required_evidence": ["tags missing from the changelog", "tags listed but not in git"],
   "host_only": false
+}
+```
+
+For a role that enables either policy, add only the applicable optional fields:
+
+```json
+{
+  "escalation_reason": "contradictory-evidence",
+  "user_directed": true
 }
 ```
 

@@ -60,7 +60,9 @@ plugin を install しても、main agent は差し替わらず、tool も外れ
 
 ## 設定
 
-role が指定するのは level であり、model 名ではありません。その level が何を意味するかは worker 側が定義します。そのため同じ role をどの backend でも使え、`--worker` で task ごとに選べます。選んだ worker がその level を定義していなければ、起動する前に拒否します。
+role が指定するのは level であり、model 名ではありません。その level が何を意味するかは worker 側が定義します。role には `preferred_worker` も指定できます。worker は `--worker`、role の `preferred_worker`、`default_worker` の順で選びます。選んだ worker がその level を定義していなければ、起動する前に拒否します。
+
+role に `allowed_escalation_reasons` を指定すると、packet はその一覧に含まれる `escalation_reason` を持つ必要があります。`requires_explicit_user_direction = true` を指定した role では、packet に `"user_directed": true` も必要です。どちらも監査のため task と一緒に記録します。`user_directed` は呼び出し側の申告であり、人が指示したことを証明する値ではありません。
 
 | adapter | 起動 | 結果の受け取り |
 |---|---|---|
@@ -79,6 +81,15 @@ task は Claude が組み立てます。何をするか、何を読んでよい�
   "allowed_writes": [],
   "required_evidence": ["tags missing from the changelog", "tags listed but not in git"],
   "host_only": false
+}
+```
+
+これらの方針を指定した role では、必要な項目だけを追加します。
+
+```json
+{
+  "escalation_reason": "contradictory-evidence",
+  "user_directed": true
 }
 ```
 
