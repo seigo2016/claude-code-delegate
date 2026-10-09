@@ -241,6 +241,17 @@ def submit(
         raise SubmitRefused("host_only work must stay in Claude Code", run_in="claude-code")
 
     plan = settings.plan(role, worker=worker)
+    escalation_reason = value.get("escalation_reason")
+    if plan.role.allowed_escalation_reasons:
+        if escalation_reason is None:
+            raise SubmitRefused(f"role {role} requires escalation_reason")
+        if escalation_reason not in plan.role.allowed_escalation_reasons:
+            raise SubmitRefused(
+                f"escalation_reason {escalation_reason!r} is not allowed for role {role}",
+                allowed_escalation_reasons=list(plan.role.allowed_escalation_reasons),
+            )
+    if plan.role.requires_explicit_user_direction and value.get("user_directed") is not True:
+        raise SubmitRefused(f"role {role} requires user_directed: true")
     if plan.role.requires_allowed_writes and not value["allowed_writes"]:
         raise SubmitRefused(f"role {role} requires a non-empty allowed_writes")
     if plan.role.forbids_allowed_writes and value["allowed_writes"]:
@@ -290,6 +301,8 @@ def submit(
         "adapter": plan.adapter,
         "model": plan.model,
         "effort": plan.effort,
+        "escalation_reason": escalation_reason,
+        "user_directed": bool(value.get("user_directed", False)),
         # Decided here rather than at run time so that a finished task can still
         # answer what its worker was allowed to do.
         "writes_allowed": bool(value["allowed_writes"]),

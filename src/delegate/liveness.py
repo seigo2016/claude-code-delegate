@@ -9,7 +9,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from pathlib import Path
 
 
@@ -18,7 +18,7 @@ class AlreadyHeld(Exception):
 
 
 @contextlib.contextmanager
-def hold(path: Path) -> Iterator[None]:
+def hold(path: Path) -> Generator[None, None, None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
     try:

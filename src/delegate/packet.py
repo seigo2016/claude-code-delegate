@@ -30,4 +30,10 @@ def validate(value: Any) -> dict[str, Any]:
             raise ValueError(f"{field} must be an array of strings")
     if not isinstance(value["host_only"], bool):
         raise ValueError("host_only must be a boolean")
+    if "escalation_reason" in value and (
+        not isinstance(value["escalation_reason"], str) or not value["escalation_reason"].strip()
+    ):
+        raise ValueError("escalation_reason must be a non-empty string")
+    if "user_directed" in value and not isinstance(value["user_directed"], bool):
+        raise ValueError("user_directed must be a boolean")
     return value

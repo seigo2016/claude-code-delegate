@@ -33,3 +33,13 @@ def test_an_empty_objective_is_rejected() -> None:
 def test_path_lists_must_hold_strings() -> None:
     with pytest.raises(ValueError, match="read must be an array of strings"):
         packet.validate({**valid(), "read": ["ok", 3]})
+
+
+def test_escalation_reason_must_be_a_nonempty_string_when_present() -> None:
+    with pytest.raises(ValueError, match="escalation_reason"):
+        packet.validate({**valid(), "escalation_reason": ""})
+
+
+def test_user_directed_must_be_a_boolean_when_present() -> None:
+    with pytest.raises(ValueError, match="user_directed"):
+        packet.validate({**valid(), "user_directed": "true"})

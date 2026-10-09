@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-from collections.abc import Iterator
+from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -38,7 +38,7 @@ def _state_path(task_dir: Path) -> Path:
 
 
 @contextlib.contextmanager
-def _held(task_dir: Path) -> Iterator[dict[str, Any]]:
+def _held(task_dir: Path) -> Generator[dict[str, Any], None, None]:
     lock_path = task_dir / "state.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as lock:

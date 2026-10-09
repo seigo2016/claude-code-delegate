@@ -33,6 +33,9 @@ class Role:
     #: may change it, so this is separate from the write scope.
     runs_commands: bool = False
     instructions: str | None = None
+    preferred_worker: str | None = None
+    allowed_escalation_reasons: tuple[str, ...] = ()
+    requires_explicit_user_direction: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,7 @@ class Settings:
             known = ", ".join(sorted(self.roles)) or "none configured"
             raise ConfigError(f"unknown role: {role_name} (configured roles: {known})")
 
-        chosen = self._choose_worker(worker)
+        chosen = self._choose_worker(worker, role.preferred_worker)
         level = chosen.levels.get(role.level)
         if level is None:
             raise ConfigError(
@@ -89,15 +92,11 @@ class Settings:
             timeout=role.timeout,
         )
 
-    def _choose_worker(self, requested: str | None) -> Worker:
+    def _choose_worker(self, requested: str | None, preferred: str | None) -> Worker:
         if requested is not None:
-            worker = self.workers.get(requested)
-            if worker is None:
-                known = ", ".join(sorted(self.workers)) or "none configured"
-                raise ConfigError(f"unknown worker: {requested} (configured workers: {known})")
-            if not worker.enabled:
-                raise ConfigError(f"worker {requested} is declared but not enabled")
-            return worker
+            return self._named_worker(requested, "explicit")
+        if preferred is not None:
+            return self._named_worker(preferred, "preferred_worker")
 
         enabled = [worker for worker in self.workers.values() if worker.enabled]
         if not enabled:
@@ -112,6 +111,21 @@ class Settings:
         if len(enabled) > 1:
             raise ConfigError("several workers are enabled; set default_worker or pass --worker")
         return enabled[0]
+
+    def _named_worker(self, name: str, source: str) -> Worker:
+        worker = self.workers.get(name)
+        if worker is None:
+            known = ", ".join(sorted(self.workers)) or "none configured"
+            if source == "preferred_worker":
+                raise ConfigError(
+                    f"preferred_worker {name} is unknown (configured workers: {known})"
+                )
+            raise ConfigError(f"unknown worker: {name} (configured workers: {known})")
+        if not worker.enabled:
+            if source == "preferred_worker":
+                raise ConfigError(f"preferred_worker {name} is declared but not enabled")
+            raise ConfigError(f"worker {name} is declared but not enabled")
+        return worker
 
 
 def _required(body: dict[str, Any], key: str, where: str) -> Any:
@@ -136,6 +150,31 @@ def _allowed_write_roots(body: dict[str, Any], where: str) -> tuple[str, ...]:
     if any(not Path(value).is_absolute() for value in values):
         raise ConfigError(f"{where}.allowed_write_roots must contain absolute paths")
     return tuple(values)
+
+
+def _optional_nonempty_string(body: dict[str, Any], key: str, where: str) -> str | None:
+    value = body.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{where}.{key} must be a non-empty string")
+    return value
+
+
+def _string_values(body: dict[str, Any], key: str, where: str) -> tuple[str, ...]:
+    values = body.get(key, [])
+    if not isinstance(values, list) or not all(
+        isinstance(value, str) and value.strip() for value in values
+    ):
+        raise ConfigError(f"{where}.{key} must be an array of non-empty strings")
+    return tuple(values)
+
+
+def _optional_bool(body: dict[str, Any], key: str, where: str) -> bool:
+    value = body.get(key, False)
+    if not isinstance(value, bool):
+        raise ConfigError(f"{where}.{key} must be a boolean")
+    return value
 
 
 def load(path: Path) -> Settings:
@@ -164,6 +203,11 @@ def load(path: Path) -> Settings:
             allowed_write_roots=allowed_write_roots,
             runs_commands=bool(body.get("runs_commands", False)),
             instructions=str(body["instructions"]) if "instructions" in body else None,
+            preferred_worker=_optional_nonempty_string(body, "preferred_worker", where),
+            allowed_escalation_reasons=_string_values(body, "allowed_escalation_reasons", where),
+            requires_explicit_user_direction=_optional_bool(
+                body, "requires_explicit_user_direction", where
+            ),
         )
     workers = {
         name: Worker(

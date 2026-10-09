@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -69,11 +70,12 @@ def test_a_read_only_prompt_forbids_scratch_writes_as_well_as_repository_edits(
 
 
 def test_external_write_root_replaces_the_read_only_instruction(tmp_path: Path) -> None:
+    external_root = tmp_path / "external-output"
     role = config.Role(
         name="repro-runner",
         level="standard",
         runs_commands=True,
-        allowed_write_roots=("/mnt/f/irop-scene-reliability",),
+        allowed_write_roots=(str(external_root),),
     )
     prompt = tasks.compose_prompt(
         tmp_path,
@@ -84,7 +86,7 @@ def test_external_write_root_replaces_the_read_only_instruction(tmp_path: Path) 
     )
 
     assert "External write roots allowed by this role:" in prompt
-    assert "/mnt/f/irop-scene-reliability" in prompt
+    assert str(external_root) in prompt
     assert "This is a read-only task." not in prompt
 
 
@@ -166,6 +168,87 @@ def test_read_only_role_refuses_a_write_scope_before_launch(tmp_path: Path) -> N
             title="audit",
             value=packet(allowed_writes=["notes.md"]),
         )
+
+
+def test_a_role_with_allowed_escalation_reasons_refuses_a_missing_reason(tmp_path: Path) -> None:
+    role = config.Role(
+        name="reviewer",
+        level="standard",
+        allowed_escalation_reasons=("contradictory-evidence",),
+    )
+
+    with pytest.raises(tasks.SubmitRefused, match="escalation_reason"):
+        tasks.submit(
+            project_root=tmp_path,
+            settings=settings(role),
+            role=role.name,
+            title="review",
+            value=packet(),
+        )
+
+
+def test_a_role_with_allowed_escalation_reasons_refuses_an_unlisted_reason(tmp_path: Path) -> None:
+    role = config.Role(
+        name="reviewer",
+        level="standard",
+        allowed_escalation_reasons=("contradictory-evidence",),
+    )
+
+    with pytest.raises(tasks.SubmitRefused, match="not allowed"):
+        tasks.submit(
+            project_root=tmp_path,
+            settings=settings(role),
+            role=role.name,
+            title="review",
+            value=packet(escalation_reason="other"),
+        )
+
+
+def test_a_user_directed_role_refuses_a_packet_without_an_explicit_declaration(
+    tmp_path: Path,
+) -> None:
+    role = config.Role(
+        name="direction-reviewer",
+        level="standard",
+        requires_explicit_user_direction=True,
+    )
+
+    with pytest.raises(tasks.SubmitRefused, match="user_directed"):
+        tasks.submit(
+            project_root=tmp_path,
+            settings=settings(role),
+            role=role.name,
+            title="direction review",
+            value=packet(),
+        )
+
+
+def test_task_state_records_policy_declarations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Process:
+        pid = 123
+
+    monkeypatch.setattr(tasks.subprocess, "Popen", lambda *args, **kwargs: Process())
+    role = config.Role(
+        name="reviewer",
+        level="standard",
+        allowed_escalation_reasons=("contradictory-evidence",),
+        requires_explicit_user_direction=True,
+    )
+
+    handle = tasks.submit(
+        project_root=tmp_path,
+        settings=settings(role),
+        role=role.name,
+        title="review",
+        value=packet(escalation_reason="contradictory-evidence", user_directed=True),
+    )
+    state_path = tasks.task_root(tmp_path) / handle["task_id"] / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert state["escalation_reason"] == "contradictory-evidence"
+    assert state["user_directed"] is True
 
 
 @pytest.mark.parametrize(
