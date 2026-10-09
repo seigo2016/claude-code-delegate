@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -25,7 +25,7 @@ with liveness.hold(__import__("pathlib").Path({lock!r})):
 
 
 @contextmanager
-def holding(tmp_path: Path) -> Iterator[Path]:
+def holding(tmp_path: Path) -> Generator[Path, None, None]:
     """Run another process that holds the lock until the block ends."""
     lock, ready, stop = tmp_path / "worker.lock", tmp_path / "ready", tmp_path / "stop"
     source = str(Path(__file__).resolve().parents[1] / "src")
