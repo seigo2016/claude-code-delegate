@@ -37,6 +37,8 @@ class RunView:
     last_warning: str | None = None
     changed_paths: tuple[str, ...] = ()
     pending_changes: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    usage_source: str | None = None
+    usage_tokens: tuple[tuple[str, int], ...] = ()
 
 
 def observe(view: RunView, event: NormalizedEvent) -> RunView:
@@ -50,7 +52,14 @@ def observe(view: RunView, event: NormalizedEvent) -> RunView:
     if event.kind == "session_started":
         return replace(view, session_id=event.session_id or view.session_id)
     if event.kind == "turn_completed":
-        return replace(view, turn_completed=True)
+        if not event.usage_tokens or event.usage_source is None:
+            return replace(view, turn_completed=True)
+        return replace(
+            view,
+            turn_completed=True,
+            usage_source=event.usage_source,
+            usage_tokens=event.usage_tokens,
+        )
     if event.kind == "runtime_warning":
         return replace(
             view,

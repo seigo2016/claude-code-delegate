@@ -29,6 +29,13 @@ MODEL_REFRESH_TIMEOUT = (
     "codex_models_manager::manager: failed to refresh available models: "
     "timeout waiting for child process to exit"
 )
+USAGE_TOKEN_FIELDS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_write_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+)
 
 
 class CodexAdapter:
@@ -106,7 +113,22 @@ class CodexAdapter:
                 )
             ]
         if kind == "turn.completed":
-            return [NormalizedEvent(kind="turn_completed")]
+            usage = event.get("usage")
+            tokens = tuple(
+                (field, usage[field])
+                for field in USAGE_TOKEN_FIELDS
+                if isinstance(usage, dict)
+                and isinstance(usage.get(field), int)
+                and not isinstance(usage[field], bool)
+                and usage[field] >= 0
+            )
+            return [
+                NormalizedEvent(
+                    kind="turn_completed",
+                    usage_source="codex" if tokens else None,
+                    usage_tokens=tokens,
+                )
+            ]
         if kind in {"item.started", "item.completed"}:
             item = event.get("item")
             if not isinstance(item, dict):

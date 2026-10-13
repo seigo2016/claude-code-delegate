@@ -128,7 +128,29 @@ if mode == "decision_needed":
 event({"type": "item.completed",
        "item": {"id": "i-2", "type": "agent_message", "text": json.dumps(good)}})
 result_path.write_text(json.dumps(good))
-event({"type": "turn.completed"})
+turn = {"type": "turn.completed"}
+if mode == "reported_usage":
+    turn["usage"] = {
+        "input_tokens": 120,
+        "cached_input_tokens": 32,
+        "cache_write_input_tokens": 8,
+        "output_tokens": 24,
+        "reasoning_output_tokens": 6,
+    }
+event(turn)
+if mode == "reported_usage":
+    event(
+        {
+            "type": "turn.completed",
+            "usage": {
+                "input_tokens": 200,
+                "cached_input_tokens": 50,
+                "cache_write_input_tokens": 12,
+                "output_tokens": 40,
+                "reasoning_output_tokens": 10,
+            },
+        }
+    )
 sys.exit(0)
 """
 
