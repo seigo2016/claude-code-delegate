@@ -65,6 +65,27 @@ def test_a_finished_task_is_delivered_once(workspace: Workspace) -> None:
     assert again["error"] == "already_delivered"
 
 
+def test_latest_codex_cumulative_usage_is_preserved_in_terminal_task_state(
+    workspace: Workspace,
+) -> None:
+    workspace.mode("reported_usage")
+    handle = workspace.submit()
+
+    state = wait_for_terminal(workspace, handle["task_id"])
+
+    assert state["status"] == "completed"
+    assert state["provider_usage"] == {
+        "source": "codex",
+        "tokens": {
+            "input_tokens": 200,
+            "cached_input_tokens": 50,
+            "cache_write_input_tokens": 12,
+            "output_tokens": 40,
+            "reasoning_output_tokens": 10,
+        },
+    }
+
+
 def test_a_task_still_running_cannot_be_collected(workspace: Workspace) -> None:
     workspace.mode("silent_hang")
     handle = workspace.submit()

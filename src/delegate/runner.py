@@ -56,13 +56,19 @@ class _Tail:
 
 
 def _snapshot(view: diagnose.RunView) -> dict[str, Any]:
-    return {
+    snapshot = {
         "event_count": view.event_count,
         "session_id": view.session_id,
         "turn_completed": view.turn_completed,
         "runtime_warnings": view.runtime_warnings,
         "heartbeat_at": events.now_iso(),
     }
+    if view.usage_tokens:
+        snapshot["provider_usage"] = {
+            "source": view.usage_source,
+            "tokens": dict(view.usage_tokens),
+        }
+    return snapshot
 
 
 def _keep_last_message(task_dir: Path, view: diagnose.RunView) -> dict[str, Any]:
