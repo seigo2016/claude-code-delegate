@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -23,7 +24,7 @@ SETTINGS_FILE = Path(".claude") / "delegate.toml"
 TASK_ROOT = Path(".claude") / "logs" / "delegate"
 CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md")
 _SHAPE = {
-    "status": "completed | decision_needed",
+    "status": "completed | decision_needed | unverified",
     "observed_facts": ["what you saw, each with the path it came from"],
     "verified_comparisons": ["what you checked against what, and the outcome"],
     "artifact_paths": ["paths a reader should open"],
@@ -51,6 +52,47 @@ def settings_path(project_root: Path) -> Path:
 
 def task_root(project_root: Path) -> Path:
     return project_root / TASK_ROOT
+
+
+def _completion_watch_registry_root() -> Path:
+    configured = os.environ.get("DELEGATE_WATCH_ROOT")
+    if configured:
+        return Path(configured)
+    return Path.home() / ".claude" / "delegate" / "watch-sessions"
+
+
+def _completion_watch_path(project_root: Path, task_id: str) -> Path:
+    identity = f"{project_root}\0{task_id}".encode()
+    return _completion_watch_registry_root() / "pending-submissions" / (
+        hashlib.sha256(identity).hexdigest() + ".json"
+    )
+
+
+def register_completion_watch(project_root: Path, task_id: str) -> None:
+    """Make a submitted task discoverable even if a shell pipeline hides its handle."""
+    store.write_json(
+        _completion_watch_path(project_root, task_id),
+        {"project_root": str(project_root), "task_id": task_id},
+    )
+
+
+def pending_completion_watches() -> list[dict[str, str]]:
+    root = _completion_watch_registry_root() / "pending-submissions"
+    found: list[dict[str, str]] = []
+    for path in sorted(root.glob("*.json")):
+        try:
+            value = store.read_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(value.get("project_root"), str) and isinstance(value.get("task_id"), str):
+            found.append({"project_root": value["project_root"], "task_id": value["task_id"]})
+    return found
+
+
+def clear_pending_completion_watches(watches: list[dict[str, str]]) -> None:
+    for watch in watches:
+        path = _completion_watch_path(Path(watch["project_root"]), watch["task_id"])
+        path.unlink(missing_ok=True)
 
 
 def fingerprint(project_root: Path, role: str, title: str, value: dict[str, Any]) -> str:
@@ -82,10 +124,16 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     if plan.role.allowed_write_roots:
         lines.append("External write roots allowed by this role:")
         lines.extend(f"- {root}" for root in plan.role.allowed_write_roots)
-        lines.append(
-            "Do not write inside the repository. External writes are allowed only below "
-            "the roots above."
-        )
+        if value["allowed_writes"]:
+            lines.append(
+                "Inside the repository, write only to the allowed_writes paths above. "
+                "Outside the repository, write only below the external roots above."
+            )
+        else:
+            lines.append(
+                "Do not write inside the repository. External writes are allowed only below "
+                "the roots above."
+            )
     if value["allowed_writes"]:
         lines.append(
             "Write only to the canonical repository-relative paths listed above. "
@@ -103,6 +151,10 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         lines.append(plan.role.instructions.strip())
     lines.append("Bring back evidence for:")
     lines.extend(f"- {item}" for item in value["required_evidence"])
+    lines.append(
+        "If you cannot run required verification or cannot supply its evidence, return unverified "
+        "instead of completed and state what could not be verified in blockers."
+    )
     lines.append("")
     # Only one backend can be handed a schema, so the shape is stated here for
     # all of them. Without it a worker invents its own and the run is wasted.
@@ -335,6 +387,7 @@ def submit(
     (task_dir / "prompt.md").write_text(compose_prompt(project_root, plan, value), encoding="utf-8")
     store.write_json(task_dir / "state.json", state)
     state = events.emit(task_dir, "starting")
+    register_completion_watch(project_root, task_id)
 
     worker_process = subprocess.Popen(
         [sys.executable, "-m", "delegate", "_run", str(task_dir)],

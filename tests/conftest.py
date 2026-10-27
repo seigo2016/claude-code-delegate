@@ -125,6 +125,13 @@ if mode == "writes_elsewhere":
 if mode == "decision_needed":
     good = {**good, "status": "decision_needed", "decision_needed": "pick a threshold"}
 
+if mode == "unverified":
+    good = {
+        **good,
+        "status": "unverified",
+        "blockers": ["the requested verification command was unavailable"],
+    }
+
 event({"type": "item.completed",
        "item": {"id": "i-2", "type": "agent_message", "text": json.dumps(good)}})
 result_path.write_text(json.dumps(good))
@@ -252,6 +259,7 @@ def workspace(tmp_path: Path) -> Workspace:
         "FAKE_CALLS": str(calls_file),
         "FAKE_CWD": str(repo),
         "DELEGATE_HEARTBEAT_SEC": "0.05",
+        "DELEGATE_WATCH_ROOT": str(repo / ".delegate-watch-sessions"),
     }
     return Workspace(
         repo=repo,

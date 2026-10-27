@@ -15,7 +15,7 @@ MAX_ITEMS = 5
 MAX_ITEM_CHARS = 300
 EVIDENCE_FIELDS = ("observed_facts", "verified_comparisons", "artifact_paths", "blockers")
 FIELDS = ("status", *EVIDENCE_FIELDS, "decision_needed")
-STATUSES = ("completed", "decision_needed")
+STATUSES = ("completed", "decision_needed", "unverified")
 
 
 def sanitize(result: Any) -> Any:

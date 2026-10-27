@@ -120,6 +120,8 @@ patcher には \`requires_allowed_writes = true\`、auditor には \`forbids_all
 
 `required_evidence` は worker への指示で、prompt に載ります。契約が確認するのは、evidence の各欄が存在し、形式と上限を満たすことです。要求した内容に答えているかは照合せず、内容の真偽も判定できません。
 
+role が外部の書き込み root を許可し、packet に `allowed_writes` がある場合、worker は repository 内ではその repository-relative path だけ、外では宣言した root 配下だけに書き込めます。要求された検証を実行できない、または根拠を添えられない場合は、理由を `blockers` に書いて `unverified` を返し、collect はこれを `completed` と区別します。
+
 live な session state を必要とする作業や、事後承認では済まず人が下すべき判断には、Claude が `"host_only": true` を付けます。この場合 submit は送信せずに拒否します。packet に明示的に書く指定であり、内容を自動分類する機能ではありません。
 
 ## コマンド

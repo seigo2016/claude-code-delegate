@@ -388,5 +388,7 @@ def _finish(
             **fields,
         )
         return
-    terminal = "decision_needed" if result["status"] == "decision_needed" else "completed"
+    terminal = (
+        result["status"] if result["status"] in {"decision_needed", "unverified"} else "completed"
+    )
     events.emit(task_dir, terminal, terminal_reason="normal_exit", **fields)

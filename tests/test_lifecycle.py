@@ -109,6 +109,20 @@ def test_a_result_that_asks_for_a_decision_is_not_reported_as_completed(
     assert state["status"] == "decision_needed"
 
 
+def test_an_unverified_result_is_collected_without_being_reported_as_completed(
+    workspace: Workspace,
+) -> None:
+    workspace.mode("unverified")
+    handle = workspace.submit()
+
+    state = wait_for_terminal(workspace, handle["task_id"])
+    collected = workspace.run("collect", handle["task_id"])
+
+    assert state["status"] == "unverified"
+    assert collected["status"] == "unverified"
+    assert collected["result"]["status"] == "unverified"
+
+
 def test_a_worker_that_exits_nonzero_is_a_failure(workspace: Workspace) -> None:
     workspace.mode("nonzero_exit")
     handle = workspace.submit()

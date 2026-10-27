@@ -156,6 +156,8 @@ contract checks that the evidence fields are present, well formed and within tho
 limits. It does not check that they answer what was asked, and it cannot tell
 whether they are true.
 
+When a role permits external write roots and the packet has `allowed_writes`, the worker may write only to those repository-relative paths inside the repository and only below the declared roots outside it. If requested verification cannot run or cannot be evidenced, the worker returns `unverified` with the reason in `blockers`; collection keeps it distinct from `completed`.
+
 Claude marks a task `"host_only": true` when it needs live session state, or when
 the judgement is one a person must make rather than approve after the fact. Submit
 then fails closed instead of sending it. This is an explicit marker written into
