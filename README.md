@@ -153,6 +153,10 @@ Only absolute reads that resolve under one of those roots are accepted; a symlin
 that resolves outside is refused. This option requires \`repo_local_reads = true\`
 and does not broaden write scope.
 
+To deny reads globally, add `denied_read_paths = ["/absolute/path"]` at the top
+level of `.claude/delegate.toml`. Submit resolves packet paths and denied paths
+before comparison, so it refuses both a denied path's descendants and its parents.
+
 `required_evidence` is instruction to the worker, and appears in its prompt. The
 contract checks that the evidence fields are present, well formed and within those
 limits. It does not check that they answer what was asked, and it cannot tell

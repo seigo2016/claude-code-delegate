@@ -62,6 +62,7 @@ class Plan:
     model: str
     effort: str
     timeout: int
+    denied_read_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class Settings:
     roles: dict[str, Role]
     workers: dict[str, Worker]
     default_worker: str | None
+    denied_read_paths: tuple[str, ...] = ()
 
     def plan(self, role_name: str, *, worker: str | None = None) -> Plan:
         role = self.roles.get(role_name)
@@ -90,6 +92,7 @@ class Settings:
             model=level.model,
             effort=level.effort,
             timeout=role.timeout,
+            denied_read_paths=self.denied_read_paths,
         )
 
     def _choose_worker(self, requested: str | None, preferred: str | None) -> Worker:
@@ -140,6 +143,15 @@ def _allowed_read_roots(body: dict[str, Any], where: str) -> tuple[str, ...]:
         raise ConfigError(f"{where}.allowed_read_roots must be an array of absolute paths")
     if any(not Path(value).is_absolute() for value in values):
         raise ConfigError(f"{where}.allowed_read_roots must contain absolute paths")
+    return tuple(values)
+
+
+def _denied_read_paths(raw: dict[str, Any]) -> tuple[str, ...]:
+    values = raw.get("denied_read_paths", [])
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise ConfigError("denied_read_paths must be an array of absolute paths")
+    if any(not Path(value).is_absolute() for value in values):
+        raise ConfigError("denied_read_paths must contain absolute paths")
     return tuple(values)
 
 
@@ -230,4 +242,5 @@ def load(path: Path) -> Settings:
         roles=roles,
         workers=workers,
         default_worker=str(default_worker) if default_worker is not None else None,
+        denied_read_paths=_denied_read_paths(raw),
     )

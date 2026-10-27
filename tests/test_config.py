@@ -64,6 +64,18 @@ def test_a_role_resolves_through_the_level_the_default_worker_defines(tmp_path: 
     assert plan.role.allowed_read_roots == ("/mnt/research-data",)
 
 
+def test_top_level_denied_read_paths_are_loaded(tmp_path: Path) -> None:
+    settings = load(
+        tmp_path,
+        SETTINGS.replace(
+            'default_worker = "codex"',
+            'default_worker = "codex"\ndenied_read_paths = ["/srv/private"]',
+        ),
+    )
+
+    assert settings.denied_read_paths == ("/srv/private",)
+
+
 def test_the_same_role_resolves_differently_on_another_worker(tmp_path: Path) -> None:
     plan = load(tmp_path).plan("artifact-auditor", worker="opencode")
 

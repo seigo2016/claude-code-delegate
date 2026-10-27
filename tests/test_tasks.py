@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -178,6 +179,68 @@ def settings(role: config.Role) -> config.Settings:
         },
         default_worker="claude",
     )
+
+
+def settings_with_denied_reads(
+    role: config.Role, denied_read_paths: tuple[str, ...]
+) -> config.Settings:
+    return replace(settings(role), denied_read_paths=denied_read_paths)
+
+
+@pytest.mark.parametrize(
+    ("read", "denied"),
+    [
+        ("private/report.md", "private"),
+        ("private", "private/report.md"),
+    ],
+    ids=("read-below-denied-path", "read-parent-of-denied-path"),
+)
+def test_submit_refuses_reads_that_overlap_denied_paths(
+    tmp_path: Path, read: str, denied: str
+) -> None:
+    role = config.Role(name="auditor", level="standard")
+
+    with pytest.raises(tasks.SubmitRefused, match="denied_read_paths") as refused:
+        tasks.submit(
+            project_root=tmp_path,
+            settings=settings_with_denied_reads(role, (str(tmp_path / denied),)),
+            role=role.name,
+            title="audit private material",
+            value=packet(read=[read]),
+        )
+
+    assert refused.value.detail["denied_reads"] == [
+        {"read": read, "denied_read_path": str(tmp_path / denied)}
+    ]
+
+
+def test_submit_allows_a_read_unrelated_to_denied_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Process:
+        pid = 123
+
+    monkeypatch.setattr(tasks.subprocess, "Popen", lambda *args, **kwargs: Process())
+    role = config.Role(name="auditor", level="standard")
+
+    handle = tasks.submit(
+        project_root=tmp_path,
+        settings=settings_with_denied_reads(role, (str(tmp_path / "private"),)),
+        role=role.name,
+        title="audit public material",
+        value=packet(read=["public/report.md"]),
+    )
+
+    assert handle["role"] == "auditor"
+
+
+def test_prompt_lists_denied_read_paths_when_configured(tmp_path: Path) -> None:
+    configured_plan = replace(plan(), denied_read_paths=("/srv/private",))
+
+    prompt = tasks.compose_prompt(tmp_path, configured_plan, packet())
+
+    assert "Do not read these paths:" in prompt
+    assert "- /srv/private" in prompt
 
 
 def test_read_only_role_refuses_a_write_scope_before_launch(tmp_path: Path) -> None:
