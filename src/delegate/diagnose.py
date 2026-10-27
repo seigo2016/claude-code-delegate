@@ -39,6 +39,8 @@ class RunView:
     pending_changes: tuple[tuple[str, tuple[str, ...]], ...] = ()
     usage_source: str | None = None
     usage_tokens: tuple[tuple[str, int], ...] = ()
+    api_failure_class: str | None = None
+    api_failure_message: str | None = None
 
 
 def observe(view: RunView, event: NormalizedEvent) -> RunView:
@@ -65,6 +67,12 @@ def observe(view: RunView, event: NormalizedEvent) -> RunView:
             view,
             runtime_warnings=view.runtime_warnings + 1,
             last_warning=event.text or view.last_warning,
+        )
+    if event.kind == "api_error":
+        return replace(
+            view,
+            api_failure_class=event.failure_class or "worker_api_error",
+            api_failure_message=event.text or view.api_failure_message,
         )
     if event.kind == "item_started" and event.item_id:
         pending = view.pending_changes
@@ -120,6 +128,8 @@ KNOWN_FAILURES = frozenset({"provider_capacity", "print_timeout", "model_refresh
 
 def classify_failure(view: RunView) -> str | None:
     """Identify a known underlying failure cause from recorded warnings."""
+    if view.api_failure_class is not None:
+        return view.api_failure_class
     if view.last_warning in KNOWN_FAILURES:
         return view.last_warning
     return None

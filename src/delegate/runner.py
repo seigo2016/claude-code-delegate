@@ -340,6 +340,8 @@ def _finish(
         return
     failure = diagnose.classify_failure(view)
     failure_field = {"failure_class": failure} if failure is not None else {}
+    if view.api_failure_message is not None:
+        failure_field["failure_message"] = view.api_failure_message
 
     if fields["exit_code"] != 0:
         events.emit(

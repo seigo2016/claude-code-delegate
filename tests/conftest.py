@@ -92,6 +92,23 @@ if mode == "nonzero_exit":
     sys.stderr.write("something broke\n")
     sys.exit(3)
 
+if mode == "opencode_expired_api_key":
+    event({
+        "type": "error",
+        "error": {
+            "name": "APIError",
+            "data": {
+                "statusCode": 401,
+                "responseBody": json.dumps({"error": {
+                    "type": "authentication_error",
+                    "code": "api_key_expired",
+                    "message": "The API key has expired. Create a new key and try again.",
+                }}),
+            },
+        },
+    })
+    sys.exit(1)
+
 if mode == "empty_result":
     event({"type": "turn.completed"})
     sys.exit(0)
@@ -245,6 +262,9 @@ def workspace(tmp_path: Path) -> Workspace:
     worker = fake_bin / "codex"
     worker.write_text(FAKE_WORKER, encoding="utf-8")
     worker.chmod(0o755)
+    opencode_worker = fake_bin / "opencode"
+    opencode_worker.write_text(FAKE_WORKER, encoding="utf-8")
+    opencode_worker.chmod(0o755)
 
     mode_file = tmp_path / "mode"
     mode_file.write_text("success", encoding="utf-8")

@@ -109,6 +109,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "session_id": state.get("session_id"),
         "terminal_reason": state.get("terminal_reason"),
         "failure_class": state.get("failure_class"),
+        "failure_message": state.get("failure_message"),
         "recovery_status": state.get("recovery_status"),
         "result": result,
         "artifacts": {

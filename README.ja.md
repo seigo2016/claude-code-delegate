@@ -100,6 +100,8 @@ task は Claude が組み立てます。何をするか、何を読んでよい�
 | tool 呼び出しが返らない | `timeout` / `failure_class: tool_stall` |
 | 応答は完了したが結果を渡さない | `timeout` / `finalization_timeout`。最後のメッセージは別に保存 |
 | 非ゼロ終了 | `failed` / `nonzero_exit` |
+| worker が認証失敗を報告した | `failed` / `auth_failed`。error message の先頭 200 文字を返す |
+| worker がその他の API error を報告した | `failed` / `worker_api_error`。error message の先頭 200 文字を返す |
 | 結果を出力しない | `failed` / `empty_result` |
 | 形式を満たさない結果 | `failed` / `invalid_result` と、その理由 |
 | worker backend が報告した変更先が宣言範囲外だった | `failed` / `write_scope_violation` と、その path |

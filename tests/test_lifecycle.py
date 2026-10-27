@@ -133,6 +133,23 @@ def test_a_worker_that_exits_nonzero_is_a_failure(workspace: Workspace) -> None:
     assert state["terminal_reason"] == "nonzero_exit"
 
 
+def test_opencode_expired_api_key_is_reported_on_collect(workspace: Workspace) -> None:
+    workspace.settings.write_text(
+        workspace.settings.read_text(encoding="utf-8").replace(
+            'adapter = "codex"', 'adapter = "opencode"'
+        ),
+        encoding="utf-8",
+    )
+    workspace.mode("opencode_expired_api_key")
+    handle = workspace.submit()
+
+    state = wait_for_terminal(workspace, handle["task_id"])
+    delivery = workspace.run("collect", handle["task_id"])
+
+    assert state["failure_class"] == "auth_failed"
+    assert delivery["failure_message"] == "The API key has expired. Create a new key and try again."
+
+
 def test_a_backend_that_cannot_write_a_result_file_still_delivers_one(
     workspace: Workspace,
 ) -> None:
