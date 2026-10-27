@@ -126,6 +126,19 @@ def test_the_hook_accepts_a_handle_before_other_bash_output(
     assert json.loads(result.stdout)["ready"][0]["task_id"] == handle["task_id"]
 
 
+def test_submit_registers_a_watch_when_a_pipeline_hides_its_handle(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    handle = workspace.submit()
+
+    result = hook_watch(
+        workspace, "pipeline reformatted the submit output", cwd=tmp_path, seconds="20"
+    )
+
+    assert result.returncode == WAKE
+    assert json.loads(result.stdout)["ready"][0]["task_id"] == handle["task_id"]
+
+
 def test_the_failure_hook_watches_a_task_started_before_later_bash_failure(
     workspace: Workspace, tmp_path: Path
 ) -> None:

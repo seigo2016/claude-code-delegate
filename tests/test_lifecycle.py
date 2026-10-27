@@ -109,6 +109,20 @@ def test_a_result_that_asks_for_a_decision_is_not_reported_as_completed(
     assert state["status"] == "decision_needed"
 
 
+def test_an_unverified_result_is_collected_without_being_reported_as_completed(
+    workspace: Workspace,
+) -> None:
+    workspace.mode("unverified")
+    handle = workspace.submit()
+
+    state = wait_for_terminal(workspace, handle["task_id"])
+    collected = workspace.run("collect", handle["task_id"])
+
+    assert state["status"] == "unverified"
+    assert collected["status"] == "unverified"
+    assert collected["result"]["status"] == "unverified"
+
+
 def test_a_worker_that_exits_nonzero_is_a_failure(workspace: Workspace) -> None:
     workspace.mode("nonzero_exit")
     handle = workspace.submit()
@@ -117,6 +131,23 @@ def test_a_worker_that_exits_nonzero_is_a_failure(workspace: Workspace) -> None:
 
     assert state["status"] == "failed"
     assert state["terminal_reason"] == "nonzero_exit"
+
+
+def test_opencode_expired_api_key_is_reported_on_collect(workspace: Workspace) -> None:
+    workspace.settings.write_text(
+        workspace.settings.read_text(encoding="utf-8").replace(
+            'adapter = "codex"', 'adapter = "opencode"'
+        ),
+        encoding="utf-8",
+    )
+    workspace.mode("opencode_expired_api_key")
+    handle = workspace.submit()
+
+    state = wait_for_terminal(workspace, handle["task_id"])
+    delivery = workspace.run("collect", handle["task_id"])
+
+    assert state["failure_class"] == "auth_failed"
+    assert delivery["failure_message"] == "The API key has expired. Create a new key and try again."
 
 
 def test_a_backend_that_cannot_write_a_result_file_still_delivers_one(

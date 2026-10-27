@@ -19,6 +19,7 @@ TERMINAL_STATES = frozenset(
     {
         "completed",
         "decision_needed",
+        "unverified",
         "failed",
         "timeout",
         "cancelled",

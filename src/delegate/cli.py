@@ -93,7 +93,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         return _fail("already_delivered", 3, delivered_at=state["delivered_at"])
 
     result: Any = None
-    if state["status"] in {"completed", "decision_needed"} or (
+    if state["status"] in {"completed", "decision_needed", "unverified"} or (
         state["status"] == "degraded" and state.get("recovery_status") == "usable"
     ):
         result = store.read_json(Path(state["result_path"]))
@@ -109,6 +109,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "session_id": state.get("session_id"),
         "terminal_reason": state.get("terminal_reason"),
         "failure_class": state.get("failure_class"),
+        "failure_message": state.get("failure_message"),
         "recovery_status": state.get("recovery_status"),
         "result": result,
         "artifacts": {
@@ -390,13 +391,19 @@ def cmd_hook_watch(args: argparse.Namespace) -> int:
             else hook_input["error"]
         )
         handles = _handles_if_present(output)
-        submitted = _watch_tasks_from_handles(handles) if handles else []
-        watched = _watch_tasks_from_handles([*_read_session_watches(session_id), *handles])
+        registered = tasks.pending_completion_watches()
+        submitted = (
+            _watch_tasks_from_handles([*handles, *registered]) if (handles or registered) else []
+        )
+        watched = _watch_tasks_from_handles(
+            [*_read_session_watches(session_id), *handles, *registered]
+        )
     except (KeyError, TypeError, OSError, ValueError, json.JSONDecodeError):
         _print({"ready": []})
         return QUIET
     _remember_watch_group(submitted)
     _remember_session_watch_group(session_id, submitted)
+    tasks.clear_pending_completion_watches(registered)
     result = _watch_tasks(watched)
     if result == WAKE:
         _prune_session_watches(session_id)

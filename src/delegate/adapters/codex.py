@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from delegate.adapters.base import NormalizedEvent
+from delegate.adapters.base import NormalizedEvent, api_error_event
 
 
 def cache_root() -> Path:
@@ -102,6 +102,10 @@ class CodexAdapter:
             return []
         if not isinstance(event, dict):
             return []
+
+        parsed_error = api_error_event(event)
+        if parsed_error is not None:
+            return [parsed_error]
 
         kind = event.get("type")
         if kind == "thread.started":

@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from delegate.adapters.base import NormalizedEvent
+from delegate.adapters.base import NormalizedEvent, api_error_event
 
 UNFINISHED = {"pending", "running"}
 
@@ -96,6 +96,12 @@ class OpenCodeAdapter:
             return []
         if not isinstance(event, dict):
             return []
+        if event.get("type") == "error":
+            error = event.get("error")
+            if not isinstance(error, dict) or error.get("name") != "APIError":
+                return []
+            parsed = api_error_event(event)
+            return [parsed] if parsed is not None else []
         part = event.get("part")
         if not isinstance(part, dict):
             return []
