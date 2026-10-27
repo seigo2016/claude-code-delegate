@@ -51,6 +51,7 @@ class Worker:
     enabled: bool
     levels: dict[str, Level]
     isolate_home: bool = True
+    resume_limit: int = 2
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class Plan:
     timeout: int
     denied_read_paths: tuple[str, ...] = ()
     isolate_home: bool = True
+    resume_limit: int = 2
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,7 @@ class Settings:
             timeout=role.timeout,
             denied_read_paths=self.denied_read_paths,
             isolate_home=chosen.isolate_home,
+            resume_limit=chosen.resume_limit,
         )
 
     def _choose_worker(self, requested: str | None, preferred: str | None) -> Worker:
@@ -192,6 +195,13 @@ def _optional_bool(body: dict[str, Any], key: str, where: str, *, default: bool 
     return value
 
 
+def _resume_limit(body: dict[str, Any], where: str) -> int:
+    value = body.get("resume_limit", 2)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigError(f"{where}.resume_limit must be a non-negative integer")
+    return value
+
+
 def load(path: Path) -> Settings:
     with path.open("rb") as handle:
         try:
@@ -238,6 +248,7 @@ def load(path: Path) -> Settings:
                 if isinstance(entry, dict)
             },
             isolate_home=_optional_bool(body, "isolate_home", f"workers.{name}", default=True),
+            resume_limit=_resume_limit(body, f"workers.{name}"),
         )
         for name, body in raw.get("workers", {}).items()
     }

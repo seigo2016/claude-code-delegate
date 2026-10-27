@@ -352,3 +352,63 @@ def test_a_cancellation_stops_the_worker_without_signalling_the_supervisor(
     workspace.run("cancel", handle["task_id"])
 
     assert wait_for_terminal(workspace, handle["task_id"])["status"] == "cancelled"
+
+
+def test_incomplete_codex_session_resumes_to_completion(workspace: Workspace) -> None:
+    workspace.mode("resume_success")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    calls = workspace.calls()
+    assert state["status"] == "completed"
+    assert state["resume_count"] == 1
+    assert state["resume_results"][0]["result"]["work_complete"] is True
+    assert calls[1][-3:] == ["resume", "session-1", "-"]
+    assert calls[0][calls[0].index("--output-schema") + 1] == (
+        calls[1][calls[1].index("--output-schema") + 1]
+    )
+    assert "blockers" in (Path(state["task_dir"]) / "resume-prompt.md").read_text()
+
+
+def test_resume_limit_stops_different_blockers(workspace: Workspace) -> None:
+    workspace.settings.write_text(workspace.settings.read_text().replace(
+        'adapter = "codex"', 'adapter = "codex"\nresume_limit = 1'
+    ))
+    workspace.mode("resume_limit")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["failure_class"] == "incomplete_work"
+    assert state["resume_count"] == 1
+    assert len(workspace.calls()) == 2
+    assert state["resume_results"][0]["result"]["blockers"] == ["blocker-1"]
+
+
+def test_repeated_blockers_stop_before_limit(workspace: Workspace) -> None:
+    workspace.mode("resume_repeated")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["failure_class"] == "incomplete_work"
+    assert state["resume_count"] == 1
+    assert len(workspace.calls()) == 2
+
+
+def test_read_only_incomplete_result_does_not_resume(workspace: Workspace) -> None:
+    workspace.mode("unverified_incomplete")
+    state = wait_for_terminal(workspace, workspace.submit()["task_id"])
+    assert state["resume_count"] == 0
+    assert len(workspace.calls()) == 1
+
+
+def test_default_resume_limit_allows_two_attempts(workspace: Workspace) -> None:
+    workspace.mode("resume_limit")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["failure_class"] == "incomplete_work"
+    assert state["resume_count"] == 2
+    assert [result["result"]["blockers"] for result in state["resume_results"]] == [
+        ["blocker-1"], ["blocker-2"]
+    ]
+    assert len(workspace.calls()) == 3

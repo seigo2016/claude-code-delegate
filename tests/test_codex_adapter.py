@@ -42,6 +42,18 @@ def test_the_command_pins_the_root_the_result_contract_and_full_reasoning(tmp_pa
     assert command[-3:] == ["--disable", "fast_mode", "-"]
 
 
+def test_resume_preserves_isolated_home_and_original_options(tmp_path: Path) -> None:
+    adapter = codex.CodexAdapter(isolate_home=True, target_home=tmp_path / "isolated",
+                           user_home=tmp_path / "user")
+    options = dict(project_root=tmp_path, prompt_path=tmp_path / "prompt",
+                   result_path=tmp_path / "result", schema_path=tmp_path / "schema",
+                   model="model", effort="high", writes_allowed=True, runs_commands=False)
+    initial = adapter.build_command(**options)
+    resumed = adapter.build_resume_command(session_id="session-1", **options)
+    assert resumed == [*initial[:-1], "resume", "session-1", "-"]
+    assert resumed[:2] == ["env", f"CODEX_HOME={tmp_path / 'isolated'}"]
+
+
 def test_external_write_roots_are_added_to_the_codex_sandbox(tmp_path: Path) -> None:
     external_root = tmp_path / "external-output"
     command = ADAPTER.build_command(

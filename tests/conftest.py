@@ -158,6 +158,12 @@ if mode in ("unverified", "unverified_incomplete", "unverified_complete"):
     if mode == "unverified_complete":
         good["work_complete"] = True
 
+if mode in ("resume_success", "resume_limit", "resume_repeated"):
+    attempt = len(pathlib.Path(os.environ["FAKE_CALLS"]).read_text().splitlines()) - 1
+    if mode != "resume_success" or attempt == 0:
+        good.update(status="unverified", work_complete=False,
+                    blockers=["same" if mode == "resume_repeated" else f"blocker-{attempt}"])
+
 event({"type": "item.completed",
        "item": {"id": "i-2", "type": "agent_message", "text": json.dumps(good)}})
 result_path.write_text(json.dumps(good))

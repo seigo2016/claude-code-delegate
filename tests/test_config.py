@@ -235,3 +235,10 @@ def test_worker_isolate_home_must_be_boolean(tmp_path: Path) -> None:
     )
     with pytest.raises(config.ConfigError, match="workers.codex.isolate_home must be a boolean"):
         load(tmp_path, text)
+
+
+@pytest.mark.parametrize("value", ['-1', 'true', '"2"'])
+def test_resume_limit_rejects_invalid_values(tmp_path: Path, value: str) -> None:
+    invalid = SETTINGS.replace('adapter = "codex"', f'adapter = "codex"\nresume_limit = {value}')
+    with pytest.raises(config.ConfigError, match="resume_limit must be a non-negative integer"):
+        load(tmp_path, invalid)

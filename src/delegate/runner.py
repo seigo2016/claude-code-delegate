@@ -12,11 +12,12 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from delegate import diagnose, envelope, events, liveness, store, workspace
 from delegate.adapters import registry
 from delegate.adapters.base import WorkerAdapter
+from delegate.adapters.codex import CodexAdapter
 
 #: A worker that never wrote a byte never did anything observable, so waiting
 #: out its whole deadline only delays the inevitable timeout. It is stopped
@@ -151,7 +152,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             schema_path, envelope.json_schema(writes_allowed=bool(state["writes_allowed"]))
         )
 
-        command = adapter.build_command(
+        command_args: dict[str, Any] = dict(
             project_root=Path(state["project_root"]),
             prompt_path=Path(state["prompt_path"]),
             result_path=Path(state["result_path"]),
@@ -164,6 +165,10 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             allowed_write_roots=tuple(state.get("allowed_write_roots", ())),
             timeout_sec=int(state.get("timeout_sec", 1800)),
         )
+        if state["adapter"] == "codex" and "isolate_home" in state:
+            command_args["isolate_home"] = state["isolate_home"]
+
+        command = adapter.build_command(**command_args)
 
         cancelled = False
         process: subprocess.Popen[bytes] | None = None
@@ -183,66 +188,135 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
         started = time.monotonic()
         timed_out = False
 
-        with (
-            Path(state["prompt_path"]).open("rb") as prompt,
-            events_path.open("wb") as event_sink,
-            stderr_path.open("wb") as error_sink,
-        ):
-            try:
-                process = subprocess.Popen(
-                    command,
-                    stdin=prompt,
-                    stdout=event_sink,
-                    stderr=error_sink,
-                    start_new_session=True,
-                )
-            except OSError as error:
-                events.emit(
-                    task_dir,
-                    "failed",
-                    terminal_reason="launch_error",
-                    launch_error=f"{type(error).__name__}: {error}",
-                    duration_sec=round(time.monotonic() - started, 3),
-                )
-                return
-            event_tail = _Tail(events_path)
-            stderr_tail = _Tail(stderr_path)
-            heartbeat = max(float(os.environ.get("DELEGATE_HEARTBEAT_SEC", "5")), 0.01)
-            deadline = started + float(state["timeout_sec"])
-            silence_limit = min(SILENCE_LIMIT_SEC, float(state["timeout_sec"]) / 2)
-            next_beat = time.monotonic()
+        prompt_path = Path(state["prompt_path"])
+        resume_count = 0
+        resume_results: list[dict[str, Any]] = []
+        previous_blockers: list[str] | None = None
+        original_session_id: str | None = None
+        # Each attempt appends to the task's streams; the deadline covers the whole task.
+        while True:
+            attempt_started = time.monotonic()
+            with (
+                prompt_path.open("rb") as prompt,
+                events_path.open("ab") as event_sink,
+                stderr_path.open("ab") as error_sink,
+            ):
+                event_tail = _Tail(events_path)
+                event_tail.offset = events_path.stat().st_size
+                stderr_tail = _Tail(stderr_path)
+                stderr_tail.offset = stderr_path.stat().st_size
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        stdin=prompt,
+                        stdout=event_sink,
+                        stderr=error_sink,
+                        start_new_session=True,
+                    )
+                except OSError as error:
+                    if resume_count:
+                        resume_results[-1].update(outcome="launch_error")
+                        events.update(task_dir, resume_results=resume_results)
+                    events.emit(
+                        task_dir,
+                        "failed",
+                        terminal_reason="launch_error",
+                        launch_error=f"{type(error).__name__}: {error}",
+                        duration_sec=round(time.monotonic() - started, 3),
+                    )
+                    return
+                event_tail_start, stderr_tail_start = event_tail.offset, stderr_tail.offset
+                heartbeat = max(float(os.environ.get("DELEGATE_HEARTBEAT_SEC", "5")), 0.01)
+                deadline = started + float(state["timeout_sec"])
+                silence_limit = min(SILENCE_LIMIT_SEC, float(state["timeout_sec"]) / 2)
+                next_beat = time.monotonic()
 
-            while process.poll() is None:
-                now = time.monotonic()
-                if cancelled or _cancellation_recorded(task_dir):
-                    cancelled = True
-                    _terminate(process)
-                    break
-                if now >= deadline:
-                    timed_out = True
-                    _terminate(process)
-                    break
-                if now - started >= silence_limit and not _worker_has_spoken(
-                    events_path, stderr_path
-                ):
-                    _terminate(process)
-                    timed_out = True
-                    break
-                if now >= next_beat:
-                    view = _absorb(view, adapter, event_tail, stderr_tail)
-                    events.update(task_dir, **_snapshot(view))
-                    next_beat = now + heartbeat
-                time.sleep(min(0.05, heartbeat))
-            exit_code = process.wait()
+                while process.poll() is None:
+                    now = time.monotonic()
+                    if cancelled or _cancellation_recorded(task_dir):
+                        cancelled = True
+                        _terminate(process)
+                        break
+                    if now >= deadline:
+                        timed_out = True
+                        _terminate(process)
+                        break
+                    if (
+                        now - attempt_started >= silence_limit
+                        and events_path.stat().st_size == event_tail_start
+                        and stderr_path.stat().st_size == stderr_tail_start
+                    ):
+                        _terminate(process)
+                        timed_out = True
+                        break
+                    if now >= next_beat:
+                        view = _absorb(view, adapter, event_tail, stderr_tail)
+                        events.update(task_dir, **_snapshot(view))
+                        next_beat = now + heartbeat
+                    time.sleep(min(0.05, heartbeat))
+                exit_code = process.wait()
 
-        view = _absorb(view, adapter, event_tail, stderr_tail)
-        fields: dict[str, Any] = {
-            "exit_code": exit_code,
-            "duration_sec": round(time.monotonic() - started, 3),
-            **_snapshot(view),
-        }
-        fields.update(_write_scope(project_root, before, task_dir, view))
-        _finish(task_dir, state, view, fields, cancelled=cancelled, timed_out=timed_out)
+            view = _absorb(view, adapter, event_tail, stderr_tail)
+            fields: dict[str, Any] = {
+                "exit_code": exit_code,
+                "duration_sec": round(time.monotonic() - started, 3),
+                **_snapshot(view),
+            }
+            fields.update(_write_scope(project_root, before, task_dir, view))
+            result, _ = _result_of(state, view)
+            sanitized = (
+                envelope.sanitize(result, writes_allowed=True) if result is not None else None
+            )
+            valid = sanitized is not None and not envelope.violations(
+                sanitized, writes_allowed=True
+            )
+            incomplete = bool(
+                valid and sanitized["status"] == "unverified" and not sanitized["work_complete"]
+            )
+            if resume_count:
+                resume_results[-1].update(
+                    outcome=("cancelled" if cancelled or _cancellation_recorded(task_dir) else
+                             "timeout" if timed_out else "nonzero_exit" if exit_code else
+                             "write_scope_violation" if fields["unauthorized_writes"] else
+                             "incomplete_work" if incomplete else
+                             str(sanitized["status"]) if valid else "invalid_or_empty_result"),
+                    result=sanitized,
+                    exit_code=exit_code,
+                )
+                events.update(task_dir, resume_results=resume_results)
+            blockers = sorted(sanitized["blockers"]) if incomplete else None
+            repeated = previous_blockers is not None and blockers == previous_blockers
+            if (
+                incomplete and state["writes_allowed"] and state["adapter"] == "codex"
+                and view.session_id and not repeated
+                and resume_count < int(state.get("resume_limit", 2))
+                and not cancelled and not _cancellation_recorded(task_dir) and not timed_out
+                and exit_code == 0 and not fields["unauthorized_writes"]
+                and time.monotonic() < deadline
+            ):
+                original_session_id = original_session_id or view.session_id
+                previous_blockers = blockers
+                resume_count += 1
+                resume_results.append(
+                    {"attempt": resume_count, "outcome": "running", "result": None}
+                )
+                events.update(task_dir, resume_count=resume_count, resume_results=resume_results)
+                command = cast(CodexAdapter, adapter).build_resume_command(
+                    session_id=original_session_id, **command_args
+                )
+                prompt_path = task_dir / "resume-prompt.md"
+                prompt_path.write_text(
+                    "Continue implementing the unfinished work listed in the blockers of your "
+                    "previous answer until all implementation is complete. Return only when all "
+                    "is complete or a decision is needed.\n", encoding="utf-8"
+                )
+                Path(state["result_path"]).unlink(missing_ok=True)
+                view = diagnose.RunView(
+                    session_id=original_session_id, changed_paths=view.changed_paths
+                )
+                continue
+            _finish(task_dir, state, view, fields, cancelled=cancelled, timed_out=timed_out)
+            return
 
 
 def _write_scope(

@@ -213,6 +213,11 @@ class CodexAdapter:
         )
         return ["env", f"CODEX_HOME={codex_home_dir}", *base_cmd]
 
+    def build_resume_command(self, *, session_id: str, **kwargs: Any) -> list[str]:
+        """Keep the original sandbox, schema and Codex home when resuming."""
+        command = self.build_command(**kwargs)
+        return [*command[:-1], "resume", session_id, "-"]
+
     def parse_events(self, raw_line: str) -> list[NormalizedEvent]:
         try:
             event: Any = json.loads(raw_line)

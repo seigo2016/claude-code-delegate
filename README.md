@@ -94,6 +94,10 @@ For `codex`, delegate redirects `CODEX_HOME` to a dedicated cache directory
 symlink to `~/.codex/auth.json` and a minimal `config.toml` without `AGENTS.md`.
 This keeps interactive instructions from leaking into delegated runs. Set
 `isolate_home = false` under `[workers.codex]` to use the unisolated home instead.
+For tasks with allowed writes, an incomplete Codex result resumes the same session
+up to twice; set `resume_limit` under `[workers.codex]` to change that limit (zero
+disables resumes). Identical consecutive blocker lists stop retries. The task's
+`state.json` records `resume_count` and `resume_results` for each attempt.
 
 Roles that ship in the example: `artifact-auditor`, `repo-cartographer`,
 `bounded-implementer`, `verification-runner`, `consistency-auditor`,
