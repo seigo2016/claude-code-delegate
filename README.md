@@ -122,6 +122,8 @@ For a role that enables either policy, add only the applicable optional fields:
 | a tool call never returned | `timeout`, `failure_class: tool_stall` |
 | the worker finished but never handed back a result | `timeout`, `finalization_timeout`, its last message kept aside |
 | the worker exited non-zero | `failed`, `nonzero_exit` |
+| the worker reported an authentication failure | `failed`, `auth_failed`, with the first 200 characters of its error message |
+| the worker reported another API error | `failed`, `worker_api_error`, with the first 200 characters of its error message |
 | the worker produced nothing | `failed`, `empty_result` |
 | the result did not meet the contract | `failed`, `invalid_result`, with the reasons |
 | the worker wrote outside its declared scope | `failed`, `write_scope_violation`, with the paths |
@@ -155,6 +157,8 @@ and does not broaden write scope.
 contract checks that the evidence fields are present, well formed and within those
 limits. It does not check that they answer what was asked, and it cannot tell
 whether they are true.
+
+When a role permits external write roots and the packet has `allowed_writes`, the worker may write only to those repository-relative paths inside the repository and only below the declared roots outside it. If requested verification cannot run or cannot be evidenced, the worker returns `unverified` with the reason in `blockers`; collection keeps it distinct from `completed`.
 
 Claude marks a task `"host_only": true` when it needs live session state, or when
 the judgement is one a person must make rather than approve after the fact. Submit

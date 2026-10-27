@@ -146,6 +146,76 @@ def test_junk_is_ignored_rather_than_crashing(sample: Sample) -> None:
     assert sample.adapter.parse_stderr_lines("nothing notable here") == []
 
 
+def test_opencode_api_error_marks_expired_api_key_as_an_authentication_failure() -> None:
+    line = json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "name": "APIError",
+                "data": {
+                    "statusCode": 401,
+                    "responseBody": json.dumps(
+                        {
+                            "error": {
+                                "type": "authentication_error",
+                                "code": "api_key_expired",
+                                "message": "The API key has expired.",
+                            }
+                        }
+                    ),
+                },
+            },
+        }
+    )
+
+    (event,) = opencode.OpenCodeAdapter().parse_events(line)
+
+    assert event.kind == "api_error"
+    assert event.failure_class == "auth_failed"
+    assert event.text == "The API key has expired."
+
+
+def test_opencode_other_api_errors_are_classified_and_keep_their_message() -> None:
+    line = json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "name": "APIError",
+                "data": {
+                    "statusCode": 429,
+                    "responseBody": json.dumps(
+                        {"error": {"code": "rate_limit", "message": "Rate limit exceeded."}}
+                    ),
+                },
+            },
+        }
+    )
+
+    (event,) = opencode.OpenCodeAdapter().parse_events(line)
+
+    assert event.kind == "api_error"
+    assert event.failure_class == "worker_api_error"
+    assert event.text == "Rate limit exceeded."
+
+
+def test_codex_error_events_are_classified_as_worker_api_errors() -> None:
+    (event,) = codex.CodexAdapter().parse_events(
+        json.dumps({"type": "error", "message": "The provider rejected the request."})
+    )
+
+    assert event.kind == "api_error"
+    assert event.failure_class == "worker_api_error"
+    assert event.text == "The provider rejected the request."
+
+
+def test_api_error_messages_are_limited_to_the_first_200_characters() -> None:
+    message = "x" * 201
+
+    (event,) = codex.CodexAdapter().parse_events(json.dumps({"type": "error", "message": message}))
+
+    assert event.text == message[:200]
+
+
 def test_the_session_identity_is_surfaced(sample: Sample) -> None:
     (event,) = [
         event

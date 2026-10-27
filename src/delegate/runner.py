@@ -340,6 +340,8 @@ def _finish(
         return
     failure = diagnose.classify_failure(view)
     failure_field = {"failure_class": failure} if failure is not None else {}
+    if view.api_failure_message is not None:
+        failure_field["failure_message"] = view.api_failure_message
 
     if fields["exit_code"] != 0:
         events.emit(
@@ -388,5 +390,7 @@ def _finish(
             **fields,
         )
         return
-    terminal = "decision_needed" if result["status"] == "decision_needed" else "completed"
+    terminal = (
+        result["status"] if result["status"] in {"decision_needed", "unverified"} else "completed"
+    )
     events.emit(task_dir, terminal, terminal_reason="normal_exit", **fields)

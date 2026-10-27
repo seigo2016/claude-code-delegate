@@ -10,13 +10,14 @@ from delegate import config, envelope, tasks
 
 
 @pytest.fixture(autouse=True)
-def _worker_binaries_present(monkeypatch: pytest.MonkeyPatch) -> None:
+def _worker_binaries_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Unit tests exercise validation, not the ambient PATH.
 
     Without this, submit success paths would depend on whether the four
     worker binaries happen to be installed where the tests run.
     """
     monkeypatch.setattr(shutil, "which", lambda name, *args, **kwargs: f"/usr/bin/{name}")
+    monkeypatch.setenv("DELEGATE_WATCH_ROOT", str(tmp_path / "watch-sessions"))
 
 
 def plan() -> config.Plan:
@@ -46,6 +47,8 @@ def test_the_prompt_states_the_result_shape_because_most_backends_cannot_be_hand
     assert "hard validity constraint" in prompt
     assert "within 240 characters" in prompt
     assert "exactly these six keys" in prompt
+    assert "return unverified instead of completed" in prompt
+    assert "what could not be verified in blockers" in prompt
 
 
 def test_a_read_only_prompt_forbids_scratch_writes_as_well_as_repository_edits(
@@ -88,6 +91,30 @@ def test_external_write_root_replaces_the_read_only_instruction(tmp_path: Path) 
     assert "External write roots allowed by this role:" in prompt
     assert str(external_root) in prompt
     assert "This is a read-only task." not in prompt
+
+
+def test_repository_writes_and_external_roots_are_both_permitted_when_declared(
+    tmp_path: Path,
+) -> None:
+    external_root = tmp_path / "external-output"
+    role = config.Role(
+        name="bounded-implementer",
+        level="standard",
+        allowed_write_roots=(str(external_root),),
+    )
+    prompt = tasks.compose_prompt(
+        tmp_path,
+        config.Plan(
+            role=role, worker="codex", adapter="codex", model="m", effort="high", timeout=60
+        ),
+        packet(allowed_writes=["src/delegate/tasks.py"]),
+    )
+
+    assert "Do not write inside the repository." not in prompt
+    assert "src/delegate/tasks.py" in prompt
+    assert str(external_root) in prompt
+    assert "Inside the repository" in prompt
+    assert "Outside the repository" in prompt
 
 
 def test_a_writable_prompt_requires_exact_repository_relative_paths(tmp_path: Path) -> None:

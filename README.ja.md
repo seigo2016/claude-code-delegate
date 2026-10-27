@@ -100,6 +100,8 @@ task は Claude が組み立てます。何をするか、何を読んでよい�
 | tool 呼び出しが返らない | `timeout` / `failure_class: tool_stall` |
 | 応答は完了したが結果を渡さない | `timeout` / `finalization_timeout`。最後のメッセージは別に保存 |
 | 非ゼロ終了 | `failed` / `nonzero_exit` |
+| worker が認証失敗を報告した | `failed` / `auth_failed`。error message の先頭 200 文字を返す |
+| worker がその他の API error を報告した | `failed` / `worker_api_error`。error message の先頭 200 文字を返す |
 | 結果を出力しない | `failed` / `empty_result` |
 | 形式を満たさない結果 | `failed` / `invalid_result` と、その理由 |
 | worker backend が報告した変更先が宣言範囲外だった | `failed` / `write_scope_violation` と、その path |
@@ -119,6 +121,8 @@ patcher には \`requires_allowed_writes = true\`、auditor には \`forbids_all
 厳格な role で mount 済みデータを読む必要がある場合は、\`repo_local_reads = true\` を維持したまま \`allowed_read_roots = ["/mnt/research-data"]\` を追加します。絶対 path は列挙した root 配下へ解決される場合だけ許可され、root 外へ解決される symlink は拒否されます。この指定は \`repo_local_reads = true\` を必要とし、書き込み scope を広げません。
 
 `required_evidence` は worker への指示で、prompt に載ります。契約が確認するのは、evidence の各欄が存在し、形式と上限を満たすことです。要求した内容に答えているかは照合せず、内容の真偽も判定できません。
+
+role が外部の書き込み root を許可し、packet に `allowed_writes` がある場合、worker は repository 内ではその repository-relative path だけ、外では宣言した root 配下だけに書き込めます。要求された検証を実行できない、または根拠を添えられない場合は、理由を `blockers` に書いて `unverified` を返し、collect はこれを `completed` と区別します。
 
 live な session state を必要とする作業や、事後承認では済まず人が下すべき判断には、Claude が `"host_only": true` を付けます。この場合 submit は送信せずに拒否します。packet に明示的に書く指定であり、内容を自動分類する機能ではありません。
 

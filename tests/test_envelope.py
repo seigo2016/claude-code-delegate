@@ -27,6 +27,18 @@ def test_a_well_formed_result_is_accepted() -> None:
     assert envelope.violations(valid()) == []
 
 
+def test_an_unverified_result_is_accepted_as_distinct_from_completed() -> None:
+    unverified = {
+        **valid(),
+        "status": "unverified",
+        "blockers": ["pytest could not run because the dependency is unavailable"],
+    }
+
+    assert envelope.violations(unverified) == []
+    assert "unverified" in envelope.STATUSES
+    assert unverified["status"] != "completed"
+
+
 def test_unknown_and_missing_keys_are_named_in_the_violation() -> None:
     extra = {**valid(), "raw_log": "..."}
     assert envelope.violations(extra) == ["unexpected fields: raw_log"]
