@@ -83,6 +83,11 @@ good = {
     "decision_needed": None,
 }
 
+if "--output-schema" in args:
+    schema_path = pathlib.Path(args[args.index("--output-schema") + 1])
+    if "work_complete" in json.loads(schema_path.read_text())["required"]:
+        good["work_complete"] = True
+
 if mode == "finalization_hang":
     event({"type": "item.completed",
            "item": {"id": "i-2", "type": "agent_message", "text": json.dumps(good)}})
@@ -142,12 +147,16 @@ if mode == "writes_elsewhere":
 if mode == "decision_needed":
     good = {**good, "status": "decision_needed", "decision_needed": "pick a threshold"}
 
-if mode == "unverified":
+if mode in ("unverified", "unverified_incomplete", "unverified_complete"):
     good = {
         **good,
         "status": "unverified",
         "blockers": ["the requested verification command was unavailable"],
     }
+    if mode == "unverified_incomplete":
+        good["work_complete"] = False
+    if mode == "unverified_complete":
+        good["work_complete"] = True
 
 event({"type": "item.completed",
        "item": {"id": "i-2", "type": "agent_message", "text": json.dumps(good)}})

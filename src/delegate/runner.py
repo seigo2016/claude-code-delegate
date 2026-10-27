@@ -71,7 +71,9 @@ def _snapshot(view: diagnose.RunView) -> dict[str, Any]:
     return snapshot
 
 
-def _keep_last_message(task_dir: Path, view: diagnose.RunView) -> dict[str, Any]:
+def _keep_last_message(
+    task_dir: Path, view: diagnose.RunView, *, writes_allowed: bool = False
+) -> dict[str, Any]:
     if view.last_agent_message is None:
         return {"recovery_status": "none"}
     message_path = task_dir / "last-agent-message.txt"
@@ -80,10 +82,20 @@ def _keep_last_message(task_dir: Path, view: diagnose.RunView) -> dict[str, Any]
         "recovery_status": "raw",
         "last_agent_message_path": str(message_path),
     }
-    if diagnose.has_usable_result(view):
+    parsed = envelope.from_text(view.last_agent_message)
+    if parsed is not None and not envelope.violations(
+        envelope.sanitize(parsed, writes_allowed=writes_allowed), writes_allowed=writes_allowed
+    ) and not (
+        writes_allowed
+        and parsed.get("status") == "unverified"
+        and parsed.get("work_complete") is False
+    ):
         recovered = task_dir / "recovered-result.json"
         raw_result = envelope.from_text(view.last_agent_message)
-        sanitized = envelope.sanitize(raw_result) if raw_result is not None else {}
+        sanitized = (
+            envelope.sanitize(raw_result, writes_allowed=writes_allowed)
+            if raw_result is not None else {}
+        )
         store.write_json(recovered, sanitized)
         fields["recovery_status"] = "usable"
         fields["recovered_result_path"] = str(recovered)
@@ -135,7 +147,9 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
 
         # Written per task, so it is right however this package was installed.
         schema_path = task_dir / "result.schema.json"
-        store.write_json(schema_path, envelope.json_schema())
+        store.write_json(
+            schema_path, envelope.json_schema(writes_allowed=bool(state["writes_allowed"]))
+        )
 
         command = adapter.build_command(
             project_root=Path(state["project_root"]),
@@ -276,17 +290,24 @@ def _absorb(
     return view
 
 
-def _salvaged_result(view: diagnose.RunView) -> dict[str, Any] | None:
+def _salvaged_result(
+    view: diagnose.RunView, *, writes_allowed: bool = False
+) -> dict[str, Any] | None:
     """A result worth delivering despite the timeout, if the worker left one.
 
     The worker finished its turn but never handed the result back through the
     file it was given. Promoting the message is only honest when it already
     satisfies the contract; anything else stays a timeout.
     """
-    if not diagnose.has_usable_result(view):
-        return None
     parsed = envelope.from_text(view.last_agent_message or "")
-    return envelope.sanitize(parsed) if parsed is not None else None
+    if parsed is None:
+        return None
+    result = envelope.sanitize(parsed, writes_allowed=writes_allowed)
+    if envelope.violations(result, writes_allowed=writes_allowed):
+        return None
+    if writes_allowed and result["status"] == "unverified" and result["work_complete"] is False:
+        return None
+    return result
 
 
 def _result_of(state: dict[str, Any], view: diagnose.RunView) -> tuple[dict[str, Any] | None, str]:
@@ -313,11 +334,12 @@ def _finish(
     timed_out: bool,
 ) -> None:
     current = store.read_json(task_dir / "state.json")
+    writes_allowed = bool(state["writes_allowed"])
     if cancelled or current.get("status") == "cancellation_requested":
         events.emit(task_dir, "cancelled", terminal_reason="cancelled", **fields)
         return
     if timed_out:
-        salvaged = _salvaged_result(view)
+        salvaged = _salvaged_result(view, writes_allowed=writes_allowed)
         if salvaged is not None:
             store.write_json(Path(state["result_path"]), salvaged)
             events.emit(
@@ -325,7 +347,7 @@ def _finish(
                 "degraded",
                 terminal_reason="timeout_with_result",
                 failure_class=diagnose.classify_timeout(view),
-                **_keep_last_message(task_dir, view),
+                **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
                 **fields,
             )
             return
@@ -334,7 +356,7 @@ def _finish(
             "timeout",
             terminal_reason="timeout",
             failure_class=diagnose.classify_timeout(view),
-            **_keep_last_message(task_dir, view),
+            **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
             **fields,
         )
         return
@@ -349,7 +371,7 @@ def _finish(
             "failed",
             terminal_reason="nonzero_exit",
             **failure_field,
-            **_keep_last_message(task_dir, view),
+            **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
             **fields,
         )
         return
@@ -371,14 +393,14 @@ def _finish(
             "failed",
             terminal_reason="empty_result",
             **failure_field,
-            **_keep_last_message(task_dir, view),
+            **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
             **fields,
         )
         return
-    result = envelope.sanitize(result)
+    result = envelope.sanitize(result, writes_allowed=writes_allowed)
     # So that a reader of the task finds the sanitized result in one place either way.
     store.write_json(Path(state["result_path"]), result)
-    problems = envelope.violations(result)
+    problems = envelope.violations(result, writes_allowed=writes_allowed)
     if problems:
         events.emit(
             task_dir,
@@ -386,8 +408,14 @@ def _finish(
             terminal_reason="invalid_result",
             result_problems=problems,
             **failure_field,
-            **_keep_last_message(task_dir, view),
+            **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
             **fields,
+        )
+        return
+    if writes_allowed and result["status"] == "unverified" and not result["work_complete"]:
+        events.emit(
+            task_dir, "failed", terminal_reason="incomplete_work",
+            failure_class="incomplete_work", **fields
         )
         return
     terminal = (

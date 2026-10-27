@@ -123,6 +123,21 @@ def test_an_unverified_result_is_collected_without_being_reported_as_completed(
     assert collected["result"]["status"] == "unverified"
 
 
+def test_writable_unverified_requires_finished_implementation(workspace: Workspace) -> None:
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+    workspace.mode("unverified_incomplete")
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["status"] == "failed"
+    assert state["failure_class"] == "incomplete_work"
+
+    workspace.mode("unverified_complete")
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["status"] == "unverified"
+    assert workspace.run("collect", handle["task_id"])["result"]["work_complete"] is True
+
+
 def test_a_worker_that_exits_nonzero_is_a_failure(workspace: Workspace) -> None:
     workspace.mode("nonzero_exit")
     handle = workspace.submit()

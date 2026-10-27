@@ -134,6 +134,9 @@ def test_a_writable_prompt_requires_exact_repository_relative_paths(tmp_path: Pa
     assert "canonical repository-relative paths" in prompt
     assert "similarly named file elsewhere" in prompt
     assert "write it to a file you were allowed to write" in prompt
+    assert "Do not return until you have completed all implementation" in prompt
+    assert '"work_complete"' in prompt
+    assert "exactly these seven keys" in prompt
 
 
 def test_role_instructions_are_included_in_the_prompt(tmp_path: Path) -> None:

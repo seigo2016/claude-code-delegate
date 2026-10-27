@@ -30,6 +30,7 @@ _SHAPE = {
     "artifact_paths": ["paths a reader should open"],
     "blockers": ["what stopped you, if anything"],
     "decision_needed": "the question only the caller can answer, or null",
+    "work_complete": "boolean: whether all objective implementation is complete",
 }
 FORBIDDEN = (
     "destructive writes",
@@ -154,15 +155,26 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         lines.append(plan.role.instructions.strip())
     lines.append("Bring back evidence for:")
     lines.extend(f"- {item}" for item in value["required_evidence"])
-    lines.append(
-        "If you cannot run required verification or cannot supply its evidence, return unverified "
-        "instead of completed and state what could not be verified in blockers."
-    )
+    if value["allowed_writes"]:
+        lines.append(
+            "Do not return until you have completed all implementation of the objective. "
+            "Only decision_needed may stop you from implementing. Do not return with incomplete "
+            "implementation in blockers. After implementation is complete, return unverified "
+            "only for verification that environmental constraints prevent you from running, "
+            "and state that verification in blockers. Set work_complete to true only when all "
+            "implementation is complete."
+        )
+    else:
+        lines.append(
+            "If you cannot run required verification or cannot supply its evidence, return "
+            "unverified instead of completed and state what could not be verified in blockers."
+        )
     lines.append("")
     # Only one backend can be handed a schema, so the shape is stated here for
     # all of them. Without it a worker invents its own and the run is wasted.
     lines.append("Reply with this JSON object and nothing else. No prose, no code fence:")
-    lines.append(json.dumps({field: _SHAPE[field] for field in envelope.FIELDS}, indent=2))
+    fields = (*envelope.FIELDS, "work_complete") if value["allowed_writes"] else envelope.FIELDS
+    lines.append(json.dumps({field: _SHAPE[field] for field in fields}, indent=2))
     lines.append("")
     overflow = (
         "write it to a file you were allowed to write and return its path"
@@ -179,9 +191,10 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         "This is a hard validity constraint: one overlong string fails the whole task. "
         "Keep each string within 240 characters so counting differences cannot cross the limit."
     )
+    key_count = "seven" if value["allowed_writes"] else "six"
     lines.append(
-        "Before replying, check that the object has exactly these six keys and every list has "
-        "at most five items. Consolidate related facts instead of adding a sixth item."
+        f"Before replying, check that the object has exactly these {key_count} keys and every "
+        "list has at most five items. Consolidate related facts instead of adding a sixth item."
     )
     lines.append(
         "Do not include metadata keys (such as toolAction, toolSummary, reasoning) "

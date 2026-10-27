@@ -18,7 +18,7 @@ FIELDS = ("status", *EVIDENCE_FIELDS, "decision_needed")
 STATUSES = ("completed", "decision_needed", "unverified")
 
 
-def sanitize(result: Any) -> Any:
+def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
     """Coerce a near-valid envelope into shape where possible.
 
     Workers (especially external models) often produce envelopes that are
@@ -35,6 +35,8 @@ def sanitize(result: Any) -> Any:
 
     if "status" in result:
         cleaned["status"] = result["status"]
+    if writes_allowed and "work_complete" in result:
+        cleaned["work_complete"] = result["work_complete"]
 
     for field in EVIDENCE_FIELDS:
         if field in result:
@@ -59,16 +61,17 @@ def sanitize(result: Any) -> Any:
     return cleaned
 
 
-def violations(result: Any) -> list[str]:
+def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
     """Every reason ``result`` is not a valid envelope, in reading order."""
     if not isinstance(result, dict):
         return ["result is not a JSON object"]
 
     problems: list[str] = []
-    missing = [field for field in FIELDS if field not in result]
+    fields = (*FIELDS, "work_complete") if writes_allowed else FIELDS
+    missing = [field for field in fields if field not in result]
     if missing:
         problems.append(f"missing fields: {', '.join(missing)}")
-    unexpected = [field for field in result if field not in FIELDS]
+    unexpected = [field for field in result if field not in fields]
     if unexpected:
         problems.append(f"unexpected fields: {', '.join(sorted(unexpected))}")
     if missing or unexpected:
@@ -76,6 +79,8 @@ def violations(result: Any) -> list[str]:
 
     if result["status"] not in STATUSES:
         problems.append(f"status must be one of: {', '.join(STATUSES)}")
+    if writes_allowed and not isinstance(result["work_complete"], bool):
+        problems.append("work_complete must be a boolean")
     for field in EVIDENCE_FIELDS:
         value = result[field]
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
@@ -145,14 +150,14 @@ def _fenced(text: str) -> str | None:
     return body[:closing] if closing != -1 else body
 
 
-def json_schema() -> dict[str, Any]:
+def json_schema(*, writes_allowed: bool = False) -> dict[str, Any]:
     """The same contract, in the form a worker can be handed up front."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "delegate result",
         "type": "object",
         "additionalProperties": False,
-        "required": list(FIELDS),
+        "required": [*FIELDS, *(["work_complete"] if writes_allowed else [])],
         "properties": {
             "status": {"type": "string", "enum": list(STATUSES)},
             **{
@@ -164,5 +169,6 @@ def json_schema() -> dict[str, Any]:
                 for field in EVIDENCE_FIELDS
             },
             "decision_needed": {"type": ["string", "null"]},
+            **({"work_complete": {"type": "boolean"}} if writes_allowed else {}),
         },
     }

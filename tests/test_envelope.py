@@ -39,6 +39,18 @@ def test_an_unverified_result_is_accepted_as_distinct_from_completed() -> None:
     assert unverified["status"] != "completed"
 
 
+def test_writable_contract_requires_a_boolean_work_complete() -> None:
+    assert "work_complete" in envelope.json_schema(writes_allowed=True)["required"]
+    assert "work_complete" not in envelope.json_schema()["required"]
+    assert envelope.violations(valid(), writes_allowed=True) == ["missing fields: work_complete"]
+    assert envelope.violations({**valid(), "work_complete": "yes"}, writes_allowed=True) == [
+        "work_complete must be a boolean"
+    ]
+    assert envelope.sanitize({**valid(), "work_complete": False}, writes_allowed=True)[
+        "work_complete"
+    ] is False
+
+
 def test_unknown_and_missing_keys_are_named_in_the_violation() -> None:
     extra = {**valid(), "raw_log": "..."}
     assert envelope.violations(extra) == ["unexpected fields: raw_log"]
