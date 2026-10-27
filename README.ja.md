@@ -120,6 +120,8 @@ patcher には \`requires_allowed_writes = true\`、auditor には \`forbids_all
 
 厳格な role で mount 済みデータを読む必要がある場合は、\`repo_local_reads = true\` を維持したまま \`allowed_read_roots = ["/mnt/research-data"]\` を追加します。絶対 path は列挙した root 配下へ解決される場合だけ許可され、root 外へ解決される symlink は拒否されます。この指定は \`repo_local_reads = true\` を必要とし、書き込み scope を広げません。
 
+読むことを全体で禁止する path は、`.claude/delegate.toml` の最上位に `denied_read_paths = ["/absolute/path"]` と書きます。submit は packet の path と denied path を解決して比較するため、禁止 path の配下だけでなく、その親 directory を読む指定も拒否します。
+
 `required_evidence` は worker への指示で、prompt に載ります。契約が確認するのは、evidence の各欄が存在し、形式と上限を満たすことです。要求した内容に答えているかは照合せず、内容の真偽も判定できません。
 
 role が外部の書き込み root を許可し、packet に `allowed_writes` がある場合、worker は repository 内ではその repository-relative path だけ、外では宣言した root 配下だけに書き込めます。要求された検証を実行できない、または根拠を添えられない場合は、理由を `blockers` に書いて `unverified` を返し、collect はこれを `completed` と区別します。

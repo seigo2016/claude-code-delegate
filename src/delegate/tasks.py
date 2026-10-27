@@ -119,6 +119,9 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         lines.extend(f"- {name}" for name in context)
     lines.append("Read first:")
     lines.extend(f"- {item}" for item in value["read"] or ["- nothing specified"])
+    if plan.denied_read_paths:
+        lines.append("Do not read these paths:")
+        lines.extend(f"- {path}" for path in plan.denied_read_paths)
     lines.append("You may write only:")
     lines.extend(f"- {item}" for item in value["allowed_writes"] or ["nothing"])
     if plan.role.allowed_write_roots:
@@ -258,6 +261,25 @@ def _invalid_scoped_reads(values: list[str], role: config.Role) -> list[str]:
     return invalid
 
 
+def _denied_reads(
+    project_root: Path, values: list[str], denied_read_paths: tuple[str, ...]
+) -> list[dict[str, str]]:
+    root = project_root.resolve(strict=False)
+    resolved_denied = [
+        (denied, Path(denied).resolve(strict=False)) for denied in denied_read_paths
+    ]
+    matches = []
+    for value in values:
+        path = Path(value)
+        resolved_read = (path if path.is_absolute() else root / path).resolve(strict=False)
+        for denied, resolved_path in resolved_denied:
+            if resolved_read.is_relative_to(resolved_path) or resolved_path.is_relative_to(
+                resolved_read
+            ):
+                matches.append({"read": value, "denied_read_path": denied})
+    return matches
+
+
 def _preflight(plan: config.Plan, binary: str) -> None:
     """Refuse work that cannot possibly run, in seconds rather than minutes.
 
@@ -314,6 +336,12 @@ def submit(
         raise SubmitRefused(
             "allowed_writes must contain canonical repository-relative paths",
             invalid_allowed_writes=invalid_writes,
+        )
+    denied_reads = _denied_reads(project_root, value["read"], plan.denied_read_paths)
+    if denied_reads:
+        raise SubmitRefused(
+            "packet reads overlap denied_read_paths",
+            denied_reads=denied_reads,
         )
     if plan.role.repo_local_reads:
         invalid_reads = _invalid_scoped_reads(value["read"], plan.role)
