@@ -212,3 +212,26 @@ def test_a_level_without_a_model_or_an_effort_is_reported(tmp_path: Path) -> Non
 
     with pytest.raises(config.ConfigError, match="workers.codex.standard is missing effort"):
         load(tmp_path, text)
+
+
+def test_worker_isolate_home_defaults_to_true_and_can_be_disabled(tmp_path: Path) -> None:
+    text = SETTINGS.replace(
+        'adapter = "codex"\nenabled = true',
+        'adapter = "codex"\nenabled = true\nisolate_home = false',
+    )
+    settings = load(tmp_path, text)
+    assert settings.workers["codex"].isolate_home is False
+    assert settings.plan("artifact-auditor").isolate_home is False
+
+    default_settings = load(tmp_path)
+    assert default_settings.workers["codex"].isolate_home is True
+    assert default_settings.plan("artifact-auditor").isolate_home is True
+
+
+def test_worker_isolate_home_must_be_boolean(tmp_path: Path) -> None:
+    text = SETTINGS.replace(
+        'adapter = "codex"\nenabled = true',
+        'adapter = "codex"\nenabled = true\nisolate_home = "yes"',
+    )
+    with pytest.raises(config.ConfigError, match="workers.codex.isolate_home must be a boolean"):
+        load(tmp_path, text)

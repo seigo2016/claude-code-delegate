@@ -89,6 +89,12 @@ prove that a person gave the instruction.
 | `opencode` | `opencode run --format json` | its last text part |
 | `claude` | `claude -p --output-format stream-json` | its closing result event |
 
+For `codex`, delegate redirects `CODEX_HOME` to a dedicated cache directory
+(`$XDG_CACHE_HOME/delegate/codex-home` or `~/.cache/delegate/codex-home`) with a
+symlink to `~/.codex/auth.json` and a minimal `config.toml` without `AGENTS.md`.
+This keeps interactive instructions from leaking into delegated runs. Set
+`isolate_home = false` under `[workers.codex]` to use the unisolated home instead.
+
 Roles that ship in the example: `artifact-auditor`, `repo-cartographer`,
 `bounded-implementer`, `verification-runner`, `consistency-auditor`,
 `adversarial-critic`.

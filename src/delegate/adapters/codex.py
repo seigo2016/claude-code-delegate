@@ -5,10 +5,101 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
+from delegate import config
 from delegate.adapters.base import NormalizedEvent, api_error_event
+
+MINIMAL_CONFIG = 'approval_policy = "never"\nsandbox_mode = "read-only"\n'
+
+
+def user_codex_home() -> Path:
+    """Where the user's interactive codex setup lives."""
+    configured = os.environ.get("CODEX_HOME")
+    if configured and configured.strip():
+        return Path(configured).expanduser().resolve(strict=False)
+    return (Path.home() / ".codex").resolve(strict=False)
+
+
+def delegate_codex_home() -> Path:
+    """Where delegate isolates codex home to avoid interactive instructions."""
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg and xdg.strip():
+        return (Path(xdg).expanduser() / "delegate" / "codex-home").resolve(strict=False)
+    return (Path.home() / ".cache" / "delegate" / "codex-home").resolve(strict=False)
+
+
+def ensure_auth_symlink(isolated_dir: Path, source_auth: Path) -> None:
+    link_path = isolated_dir / "auth.json"
+    source = source_auth.expanduser().resolve(strict=False)
+    if link_path.is_symlink():
+        try:
+            target = Path(os.readlink(link_path)).resolve(strict=False)
+            if target == source and (link_path.exists() or not source.exists()):
+                return
+        except OSError:
+            pass
+        link_path.unlink(missing_ok=True)
+    elif link_path.exists():
+        link_path.unlink()
+    link_path.symlink_to(source)
+
+
+def prepare_codex_home(
+    *,
+    target_home: Path | None = None,
+    user_home: Path | None = None,
+) -> Path:
+    target = target_home if target_home is not None else delegate_codex_home()
+    source_home = user_home if user_home is not None else user_codex_home()
+
+    target.mkdir(parents=True, exist_ok=True)
+
+    if target.resolve(strict=False) != source_home.resolve(strict=False):
+        ensure_auth_symlink(target, source_home / "auth.json")
+
+    config_path = target / "config.toml"
+    if not config_path.exists() or config_path.read_text(encoding="utf-8") != MINIMAL_CONFIG:
+        config_path.write_text(MINIMAL_CONFIG, encoding="utf-8")
+
+    agents_path = target / "AGENTS.md"
+    if agents_path.exists() or agents_path.is_symlink():
+        agents_path.unlink()
+
+    return target
+
+
+def resolve_isolate_home(project_root: Path) -> bool:
+    candidates = (
+        project_root / ".claude" / "delegate.toml",
+        project_root / "delegate.toml",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            try:
+                settings = config.load(candidate)
+                worker = settings.workers.get("codex")
+                if worker is not None:
+                    return worker.isolate_home
+                for w in settings.workers.values():
+                    if w.adapter == "codex":
+                        return w.isolate_home
+            except Exception:
+                try:
+                    with candidate.open("rb") as handle:
+                        data = tomllib.load(handle)
+                    workers = data.get("workers", {})
+                    if isinstance(workers, dict):
+                        codex_section = workers.get("codex")
+                        if isinstance(codex_section, dict) and "isolate_home" in codex_section:
+                            val = codex_section["isolate_home"]
+                            if isinstance(val, bool):
+                                return val
+                except Exception:
+                    pass
+    return True
 
 
 def cache_root() -> Path:
@@ -41,6 +132,17 @@ USAGE_TOKEN_FIELDS = (
 class CodexAdapter:
     name = "codex"
 
+    def __init__(
+        self,
+        *,
+        isolate_home: bool | None = None,
+        target_home: Path | None = None,
+        user_home: Path | None = None,
+    ) -> None:
+        self.isolate_home = isolate_home
+        self.target_home = target_home
+        self.user_home = user_home
+
     def build_command(
         self,
         *,
@@ -55,6 +157,7 @@ class CodexAdapter:
         allowed_read_roots: tuple[str, ...] = (),
         allowed_write_roots: tuple[str, ...] = (),
         timeout_sec: int = 1800,
+        isolate_home: bool | None = None,
     ) -> list[str]:
         del allowed_read_roots
         del timeout_sec
@@ -66,7 +169,7 @@ class CodexAdapter:
             if writable
             else "[]"
         )
-        return [
+        base_cmd = [
             "codex",
             "exec",
             "-C",
@@ -94,6 +197,21 @@ class CodexAdapter:
             "fast_mode",
             "-",
         ]
+        effective_isolate = isolate_home
+        if effective_isolate is None:
+            if self.isolate_home is not None:
+                effective_isolate = self.isolate_home
+            else:
+                effective_isolate = resolve_isolate_home(project_root)
+
+        if not effective_isolate:
+            return base_cmd
+
+        codex_home_dir = prepare_codex_home(
+            target_home=self.target_home,
+            user_home=self.user_home,
+        )
+        return ["env", f"CODEX_HOME={codex_home_dir}", *base_cmd]
 
     def parse_events(self, raw_line: str) -> list[NormalizedEvent]:
         try:

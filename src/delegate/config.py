@@ -50,6 +50,7 @@ class Worker:
     adapter: str
     enabled: bool
     levels: dict[str, Level]
+    isolate_home: bool = True
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ class Plan:
     effort: str
     timeout: int
     denied_read_paths: tuple[str, ...] = ()
+    isolate_home: bool = True
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,7 @@ class Settings:
             effort=level.effort,
             timeout=role.timeout,
             denied_read_paths=self.denied_read_paths,
+            isolate_home=chosen.isolate_home,
         )
 
     def _choose_worker(self, requested: str | None, preferred: str | None) -> Worker:
@@ -182,8 +185,8 @@ def _string_values(body: dict[str, Any], key: str, where: str) -> tuple[str, ...
     return tuple(values)
 
 
-def _optional_bool(body: dict[str, Any], key: str, where: str) -> bool:
-    value = body.get(key, False)
+def _optional_bool(body: dict[str, Any], key: str, where: str, *, default: bool = False) -> bool:
+    value = body.get(key, default)
     if not isinstance(value, bool):
         raise ConfigError(f"{where}.{key} must be a boolean")
     return value
@@ -234,6 +237,7 @@ def load(path: Path) -> Settings:
                 for level, entry in body.items()
                 if isinstance(entry, dict)
             },
+            isolate_home=_optional_bool(body, "isolate_home", f"workers.{name}", default=True),
         )
         for name, body in raw.get("workers", {}).items()
     }
