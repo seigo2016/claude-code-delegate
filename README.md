@@ -70,6 +70,8 @@ until you declare one.
 
 ## Configuration
 
+Set top-level `temp_root = "/absolute/path"` in `.claude/delegate.toml` to place task temporary directories there; the default is the delegate cache directory under `tmp`.
+
 A role asks for a level, never a model, and each worker says what that level
 means for itself. A role may also name `preferred_worker`. Worker selection is,
 in order: `--worker`, the role's `preferred_worker`, then `default_worker`. A

@@ -54,6 +54,24 @@ def test_task_temp_and_root_warnings(workspace: Workspace, tmp_path: Path, isola
     assert delivery["runtime_warnings"] == [f"New entry in allowed_write_root: {workspace.repo / 'smoke-test-123'}"]
 
 
+def test_configured_temp_root(workspace: Workspace, tmp_path: Path) -> None:
+    temp_root = tmp_path / "custom" / "temp"
+    record = tmp_path / "temp-record"
+    workspace.env["FAKE_TEMP_RECORD"] = str(record)
+    workspace.env["FAKE_ROOT"] = str(workspace.repo)
+    workspace.settings.write_text(f'temp_root = "{temp_root}"\n' + workspace.settings.read_text())
+    workspace.mode("temporary_and_root_entries")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["declared/output.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    temp = temp_root / handle["task_id"]
+    assert record.read_text() == str(temp)
+    roots_arg = next(x for x in workspace.calls()[0] if x.startswith("sandbox_workspace_write.writable_roots="))
+    assert str(temp) in json.loads(roots_arg.split("=", 1)[1])
+    assert state["status"] == "completed"
+    assert temp_root.is_dir() and not temp.exists()
+
+
 def test_command_only_task_removes_temp_on_cancellation(workspace: Workspace, tmp_path: Path) -> None:
     workspace.env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
     record = tmp_path / "temp-record"

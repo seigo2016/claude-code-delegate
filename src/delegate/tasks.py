@@ -405,6 +405,7 @@ def submit(
         # answer what its worker was allowed to do.
         "writes_allowed": bool(value["allowed_writes"]),
         "runs_commands": plan.role.runs_commands,
+        "temp_root": settings.temp_root,
         "allowed_read_roots": list(plan.role.allowed_read_roots),
         "allowed_write_roots": list(plan.role.allowed_write_roots),
         "timeout_sec": plan.timeout,

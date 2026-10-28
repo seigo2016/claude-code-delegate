@@ -145,7 +145,8 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
         roots_before = workspace.root_entries(state.get("allowed_write_roots", ()))
         temp_dir = None
         if state["writes_allowed"] or state["runs_commands"]:
-            temp_dir = cache_root() / "tmp" / state["task_id"]
+            temp_root = Path(state["temp_root"]) if state.get("temp_root") else cache_root() / "tmp"
+            temp_dir = temp_root / state["task_id"]
             temp_dir.mkdir(parents=True, exist_ok=True)
         state = events.emit(
             task_dir, "running", started_at=events.now_iso(), root_entries_before=roots_before,

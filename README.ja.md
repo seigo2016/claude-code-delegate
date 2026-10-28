@@ -60,6 +60,8 @@ plugin を install しても、main agent は差し替わらず、tool も外れ
 
 ## 設定
 
+`.claude/delegate.toml` の最上位に `temp_root = "/absolute/path"` を指定すると task の一時 directory をその配下に置きます。省略時は delegate cache 配下の `tmp` を使います。
+
 role が指定するのは level であり、model 名ではありません。その level が何を意味するかは worker 側が定義します。role には `preferred_worker` も指定できます。worker は `--worker`、role の `preferred_worker`、`default_worker` の順で選びます。選んだ worker がその level を定義していなければ、起動する前に拒否します。
 
 role に `allowed_escalation_reasons` を指定すると、packet はその一覧に含まれる `escalation_reason` を持つ必要があります。`requires_explicit_user_direction = true` を指定した role では、packet に `"user_directed": true` も必要です。どちらも監査のため task と一緒に記録します。`user_directed` は呼び出し側の申告であり、人が指示したことを証明する値ではありません。

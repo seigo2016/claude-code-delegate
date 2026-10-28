@@ -76,6 +76,12 @@ def test_top_level_denied_read_paths_are_loaded(tmp_path: Path) -> None:
     assert settings.denied_read_paths == ("/srv/private",)
 
 
+@pytest.mark.parametrize("value", ['"relative/path"', '42', '""'])
+def test_temp_root_requires_absolute_path(tmp_path: Path, value: str) -> None:
+    with pytest.raises(config.ConfigError, match="temp_root must be an absolute path"):
+        load(tmp_path, f"temp_root = {value}\n" + SETTINGS)
+
+
 def test_the_same_role_resolves_differently_on_another_worker(tmp_path: Path) -> None:
     plan = load(tmp_path).plan("artifact-auditor", worker="opencode")
 

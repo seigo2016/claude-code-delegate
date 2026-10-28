@@ -75,6 +75,7 @@ class Settings:
     workers: dict[str, Worker]
     default_worker: str | None
     denied_read_paths: tuple[str, ...] = ()
+    temp_root: str | None = None
 
     def plan(self, role_name: str, *, worker: str | None = None) -> Plan:
         role = self.roles.get(role_name)
@@ -253,9 +254,15 @@ def load(path: Path) -> Settings:
         for name, body in raw.get("workers", {}).items()
     }
     default_worker = raw.get("default_worker")
+    temp_root = raw.get("temp_root")
+    if temp_root is not None and (
+        not isinstance(temp_root, str) or not Path(temp_root).is_absolute()
+    ):
+        raise ConfigError("temp_root must be an absolute path")
     return Settings(
         roles=roles,
         workers=workers,
         default_worker=str(default_worker) if default_worker is not None else None,
         denied_read_paths=_denied_read_paths(raw),
+        temp_root=temp_root,
     )
