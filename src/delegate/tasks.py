@@ -125,6 +125,11 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         lines.extend(f"- {path}" for path in plan.denied_read_paths)
     lines.append("You may write only:")
     lines.extend(f"- {item}" for item in value["allowed_writes"] or ["nothing"])
+    if value["allowed_writes"] or plan.role.runs_commands:
+        lines.append(
+            "Create temporary files and directories only under $TMPDIR; do not create new "
+            "entries directly under allowed_write_roots except packet-named outputs."
+        )
     if plan.role.allowed_write_roots:
         lines.append("External write roots allowed by this role:")
         lines.extend(f"- {root}" for root in plan.role.allowed_write_roots)
@@ -143,7 +148,7 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
             "Write only to the canonical repository-relative paths listed above. "
             "Do not write a similarly named file elsewhere."
         )
-    elif not plan.role.allowed_write_roots:
+    elif not plan.role.allowed_write_roots and not plan.role.runs_commands:
         lines.append(
             "This is a read-only task. Do not invoke write, edit, or patch tools; "
             "do not create files in .claude, /tmp, or elsewhere."

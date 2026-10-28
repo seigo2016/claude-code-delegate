@@ -12,6 +12,8 @@ import signal
 import time
 from pathlib import Path
 
+import pytest
+
 from conftest import PACKET, Workspace
 
 
@@ -23,6 +25,50 @@ def wait_for_terminal(workspace: Workspace, task_id: str, timeout: float = 20) -
             return state
         time.sleep(0.05)
     raise AssertionError(f"task {task_id} never finished")
+
+
+@pytest.mark.parametrize("isolated", [True, False])
+def test_task_temp_and_root_warnings(workspace: Workspace, tmp_path: Path, isolated: bool) -> None:
+    workspace.env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    workspace.env["FAKE_TEMP_RECORD"] = str(tmp_path / "temp-record")
+    workspace.env["FAKE_ROOT"] = str(workspace.repo)
+    workspace.settings.write_text(
+        workspace.settings.read_text().replace(
+            'adapter = "codex"', f'adapter = "codex"\nisolate_home = {str(isolated).lower()}', 1
+        ).replace(
+            '[roles.bounded-implementer]\nlevel = "standard"',
+            f'[roles.bounded-implementer]\nlevel = "standard"\nallowed_write_roots = ["{workspace.repo}"]',
+        )
+    )
+    workspace.mode("temporary_and_root_entries")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["declared/output.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    temp = tmp_path / "cache" / "tmp" / handle["task_id"]
+    assert Path(workspace.env["FAKE_TEMP_RECORD"]).read_text() == str(temp)
+    roots_arg = next(x for x in workspace.calls()[0] if x.startswith("sandbox_workspace_write.writable_roots="))
+    assert str(temp) in json.loads(roots_arg.split("=", 1)[1])
+    assert not temp.exists()
+    assert state["status"] == "completed"
+    delivery = workspace.run("collect", handle["task_id"])
+    assert delivery["runtime_warnings"] == [f"New entry in allowed_write_root: {workspace.repo / 'smoke-test-123'}"]
+
+
+def test_command_only_task_removes_temp_on_cancellation(workspace: Workspace, tmp_path: Path) -> None:
+    workspace.env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    record = tmp_path / "temp-record"
+    workspace.env["FAKE_TEMP_RECORD"] = str(record)
+    workspace.mode("temporary_hang")
+    handle = workspace.submit(role="verification-runner")
+    deadline = time.monotonic() + 10
+    while not record.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    temp = Path(record.read_text())
+    assert temp == tmp_path / "cache" / "tmp" / handle["task_id"]
+    assert temp.is_dir()
+    workspace.run("cancel", handle["task_id"])
+    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "cancelled"
+    assert not temp.exists()
 
 
 def test_submitting_returns_a_handle_without_waiting(workspace: Workspace) -> None:

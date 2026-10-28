@@ -110,6 +110,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "terminal_reason": state.get("terminal_reason"),
         "failure_class": state.get("failure_class"),
         "failure_message": state.get("failure_message"),
+        "runtime_warnings": state.get("root_entry_warnings", []),
         "recovery_status": state.get("recovery_status"),
         "result": result,
         "artifacts": {

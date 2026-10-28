@@ -158,6 +158,7 @@ class CodexAdapter:
         allowed_write_roots: tuple[str, ...] = (),
         timeout_sec: int = 1800,
         isolate_home: bool | None = None,
+        temp_dir: Path | None = None,
     ) -> list[str]:
         del allowed_read_roots
         del timeout_sec
@@ -165,7 +166,9 @@ class CodexAdapter:
         # afterwards, not the sandbox.
         writable = writes_allowed or runs_commands
         roots = (
-            json.dumps(list(dict.fromkeys([str(cache_root()), *allowed_write_roots])))
+            json.dumps(list(dict.fromkeys([
+                str(cache_root()), *allowed_write_roots, *([str(temp_dir)] if temp_dir else [])
+            ])))
             if writable
             else "[]"
         )
@@ -204,14 +207,15 @@ class CodexAdapter:
             else:
                 effective_isolate = resolve_isolate_home(project_root)
 
+        env = [f"TMPDIR={temp_dir}"] if writable and temp_dir is not None else []
         if not effective_isolate:
-            return base_cmd
+            return ["env", *env, *base_cmd] if env else base_cmd
 
         codex_home_dir = prepare_codex_home(
             target_home=self.target_home,
             user_home=self.user_home,
         )
-        return ["env", f"CODEX_HOME={codex_home_dir}", *base_cmd]
+        return ["env", f"CODEX_HOME={codex_home_dir}", *env, *base_cmd]
 
     def build_resume_command(self, *, session_id: str, **kwargs: Any) -> list[str]:
         """Keep the original sandbox, schema and Codex home when resuming."""

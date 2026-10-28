@@ -59,6 +59,10 @@ def event(payload):
 if mode == "utterly_silent":
     time.sleep(60)
 
+if mode == "temporary_hang":
+    pathlib.Path(os.environ["FAKE_TEMP_RECORD"]).write_text(os.environ["TMPDIR"])
+    time.sleep(60)
+
 event({"type": "thread.started", "thread_id": "session-1"})
 
 if mode == "tool_hang":
@@ -73,6 +77,15 @@ if mode == "wait_for_foreign_change":
     deadline = time.monotonic() + 5
     while not foreign.exists() and time.monotonic() < deadline:
         time.sleep(0.01)
+
+if mode == "temporary_and_root_entries":
+    temp = pathlib.Path(os.environ["TMPDIR"])
+    pathlib.Path(os.environ["FAKE_TEMP_RECORD"]).write_text(str(temp))
+    (temp / "scratch").mkdir()
+    root = pathlib.Path(os.environ["FAKE_ROOT"])
+    (root / "smoke-test-123").mkdir()
+    (root / "declared").mkdir()
+    (root / "declared" / "output.txt").write_text("ok")
 
 good = {
     "status": "completed",

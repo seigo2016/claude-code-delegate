@@ -17,7 +17,7 @@ from typing import Any, cast
 from delegate import diagnose, envelope, events, liveness, store, workspace
 from delegate.adapters import registry
 from delegate.adapters.base import WorkerAdapter
-from delegate.adapters.codex import CodexAdapter
+from delegate.adapters.codex import CodexAdapter, cache_root
 
 #: A worker that never wrote a byte never did anything observable, so waiting
 #: out its whole deadline only delays the inevitable timeout. It is stopped
@@ -142,7 +142,15 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             events.emit(task_dir, "cancelled", terminal_reason="cancelled_before_start")
             return
 
-        state = events.emit(task_dir, "running", started_at=events.now_iso())
+        roots_before = workspace.root_entries(state.get("allowed_write_roots", ()))
+        temp_dir = None
+        if state["writes_allowed"] or state["runs_commands"]:
+            temp_dir = cache_root() / "tmp" / state["task_id"]
+            temp_dir.mkdir(parents=True, exist_ok=True)
+        state = events.emit(
+            task_dir, "running", started_at=events.now_iso(), root_entries_before=roots_before,
+            temp_dir=str(temp_dir) if temp_dir is not None else None,
+        )
         project_root = Path(state["project_root"])
         before = workspace.changed_paths(project_root)
 
@@ -167,6 +175,8 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
         )
         if state["adapter"] == "codex" and "isolate_home" in state:
             command_args["isolate_home"] = state["isolate_home"]
+        if state["adapter"] == "codex" and temp_dir is not None:
+            command_args["temp_dir"] = temp_dir
 
         command = adapter.build_command(**command_args)
 
@@ -212,6 +222,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                         stdout=event_sink,
                         stderr=error_sink,
                         start_new_session=True,
+                        env={**os.environ, "TMPDIR": str(temp_dir)} if temp_dir else None,
                     )
                 except OSError as error:
                     if resume_count:
@@ -308,7 +319,9 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                 prompt_path.write_text(
                     "Continue implementing the unfinished work listed in the blockers of your "
                     "previous answer until all implementation is complete. Return only when all "
-                    "is complete or a decision is needed.\n", encoding="utf-8"
+                    "is complete or a decision is needed. Create temporary files and directories "
+                    "only under $TMPDIR; do not create new entries directly under "
+                    "allowed_write_roots except packet-named outputs.\n", encoding="utf-8"
                 )
                 Path(state["result_path"]).unlink(missing_ok=True)
                 view = diagnose.RunView(

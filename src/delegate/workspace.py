@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 
 # The task's own bookkeeping is not the worker's doing.
@@ -29,6 +30,29 @@ IGNORED_EXTENSIONS = (
     ".pyc",
     ".pyo",
 )
+
+
+def root_entries(roots: Iterable[str]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for root in roots:
+        try:
+            result[str(root)] = sorted(os.listdir(root))
+        except OSError:
+            continue
+    return result
+
+
+def new_root_entries(before: dict[str, list[str]], project_root: Path, allowed: list[str]) -> list[str]:
+    after = root_entries(before)
+    outputs = [Path(os.path.abspath(project_root / path)) for path in allowed]
+    warnings = []
+    for root, names in before.items():
+        for name in sorted(set(after.get(root, ())) - set(names)):
+            path = Path(os.path.abspath(Path(root) / name))
+            if any(path == output or path in output.parents or output in path.parents for output in outputs):
+                continue
+            warnings.append(f"New entry in allowed_write_root: {path}")
+    return warnings
 
 
 def _is_ignored(path: str) -> bool:

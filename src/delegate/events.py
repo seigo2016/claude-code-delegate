@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import shutil
 from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from delegate import store
+from delegate import store, workspace
 
 TERMINAL_STATES = frozenset(
     {
@@ -52,6 +53,16 @@ def emit(task_dir: Path, status: str, **fields: Any) -> dict[str, Any]:
         previous = state.get("status")
         if previous in TERMINAL_STATES and status != previous:
             return state
+
+        if status in TERMINAL_STATES and previous not in TERMINAL_STATES:
+            before = state.get("root_entries_before", {})
+            if before:
+                packet = store.read_json(task_dir / "packet.json")
+                fields["root_entry_warnings"] = workspace.new_root_entries(
+                    before, Path(state["project_root"]), packet["allowed_writes"]
+                )
+            if state.get("temp_dir"):
+                shutil.rmtree(state["temp_dir"], ignore_errors=True)
 
         ts = now_iso()
         record = {"ts": ts, "task_id": state["task_id"], "status": status, **fields}
