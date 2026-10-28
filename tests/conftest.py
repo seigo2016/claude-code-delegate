@@ -300,7 +300,7 @@ def workspace(tmp_path: Path) -> Workspace:
 
     src = str(Path(__file__).resolve().parents[1] / "src")
     env = {
-        **os.environ,
+        **{key: value for key, value in os.environ.items() if key != "CLAUDE_CODE_SESSION_ID"},
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "PYTHONPATH": src,
         "FAKE_MODE": str(mode_file),

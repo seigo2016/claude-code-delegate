@@ -139,6 +139,45 @@ def test_submit_registers_a_watch_when_a_pipeline_hides_its_handle(
     assert json.loads(result.stdout)["ready"][0]["task_id"] == handle["task_id"]
 
 
+def test_pending_submissions_are_delivered_only_to_their_sessions(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
+    first = workspace.submit(title="first")
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-2"
+    second = workspace.submit(title="second")
+
+    start = subprocess.run(
+        [sys.executable, "-m", "delegate", "_hook-reconcile", "--project-root", str(workspace.repo)],
+        input=json.dumps({"session_id": "session-2"}), capture_output=True, text=True,
+        env=workspace.env, cwd=tmp_path,
+    )
+    assert start.returncode == 0
+    assert {item["task_id"] for item in json.loads(start.stdout)["tasks"]} == {second["task_id"]}
+    result = hook_watch(workspace, "filtered", cwd=tmp_path, session_id="session-2", seconds="20")
+    assert result.returncode == WAKE
+    assert [item["task_id"] for item in json.loads(result.stdout)["ready"]] == [second["task_id"]]
+    result = hook_watch(workspace, "filtered", cwd=tmp_path, session_id="session-1", seconds="20")
+    assert result.returncode == WAKE
+    assert [item["task_id"] for item in json.loads(result.stdout)["ready"]] == [first["task_id"]]
+    result = hook_watch(workspace, json.dumps(first), cwd=tmp_path, session_id="session-2", seconds="0")
+    assert result.returncode == WAKE
+    assert all(item["task_id"] != first["task_id"] for item in json.loads(result.stdout)["ready"])
+
+
+def test_identical_active_submissions_from_distinct_sessions_are_not_deduplicated(
+    workspace: Workspace,
+) -> None:
+    workspace.mode("silent_hang")
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
+    first = workspace.submit()
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-2"
+    second = workspace.submit()
+    assert first["task_id"] != second["task_id"]
+    workspace.run("cancel", first["task_id"])
+    workspace.run("cancel", second["task_id"])
+
+
 def test_the_failure_hook_watches_a_task_started_before_later_bash_failure(
     workspace: Workspace, tmp_path: Path
 ) -> None:

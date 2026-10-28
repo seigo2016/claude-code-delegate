@@ -77,7 +77,7 @@ def register_completion_watch(project_root: Path, task_id: str) -> None:
     )
 
 
-def pending_completion_watches() -> list[dict[str, str]]:
+def pending_completion_watches(session_id: str | None = None) -> list[dict[str, str]]:
     root = _completion_watch_registry_root() / "pending-submissions"
     found: list[dict[str, str]] = []
     for path in sorted(root.glob("*.json")):
@@ -86,6 +86,13 @@ def pending_completion_watches() -> list[dict[str, str]]:
         except (OSError, ValueError, json.JSONDecodeError):
             continue
         if isinstance(value.get("project_root"), str) and isinstance(value.get("task_id"), str):
+            try:
+                state = store.read_json(task_root(Path(value["project_root"])) / value["task_id"] / "state.json")
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            owner = state.get("submitter_session_id")
+            if session_id and owner and owner != session_id:
+                continue
             found.append({"project_root": value["project_root"], "task_id": value["task_id"]})
     return found
 
@@ -213,7 +220,7 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     return "\n".join(lines) + "\n"
 
 
-def _find_duplicate(root: Path, key: str) -> dict[str, Any] | None:
+def _find_duplicate(root: Path, key: str, session_id: str | None = None) -> dict[str, Any] | None:
     """The identical task that is still running, if there is one.
 
     Only a task still in flight counts. Matching finished ones too would answer a
@@ -227,7 +234,11 @@ def _find_duplicate(root: Path, key: str) -> dict[str, Any] | None:
             state = store.read_json(path)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        if state.get("fingerprint") == key and state.get("status") in events.ACTIVE_STATES:
+        if (
+            state.get("fingerprint") == key
+            and state.get("status") in events.ACTIVE_STATES
+            and state.get("submitter_session_id") == session_id
+        ):
             return state
     return None
 
@@ -378,7 +389,8 @@ def submit(
     root = task_root(project_root)
     root.mkdir(parents=True, exist_ok=True)
     key = fingerprint(project_root, role, title, value)
-    duplicate = _find_duplicate(root, key)
+    submitter_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID") or None
+    duplicate = _find_duplicate(root, key, submitter_session_id)
     if duplicate is not None:
         return handle_of(duplicate, deduplicated=True)
 
@@ -415,6 +427,7 @@ def submit(
         "resume_results": [],
         "pid": None,
         "session_id": None,
+        "submitter_session_id": submitter_session_id,
         "exit_code": None,
         "terminal_reason": None,
         "failure_class": None,

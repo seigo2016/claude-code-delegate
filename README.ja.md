@@ -145,6 +145,8 @@ skill と hook が実行します。人が直接使うのは診断のときだ�
 
 `submit` は `--worker <name>` で backend を task ごとに上書きできます。全コマンドが `--project-root` を受け取ります。submit handle と完了通知にも正規化済みの root が含まれるため、cross-repository task は submit 時と同じ ledger から回収されます。1 回の Bash 呼び出しで複数の独立 task を submit しても、hook は返された全 handle を追跡します。1 件を collect した後は、同じ呼び出しの未回収 task に対して再び待機します。
 
+Claude Code が `CLAUDE_CODE_SESSION_ID` を提供する場合、submit はその ID を記録し、hook は同じ session の task だけを報告します。ID がない以前の task や submit は従来どおり共有されます。手動の `watch`、`reconcile`、`collect` は project 全体を対象とする診断用コマンドです。
+
 ## 検出の範囲
 
 検出できる:
