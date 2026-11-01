@@ -104,9 +104,12 @@ def cache_root() -> Path:
     home directory, and `uv run pytest` was measured stopping before pytest started
     because it could not open its cache there.
     """
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        return Path(xdg)
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Caches"
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return Path.home() / ".cache"
 
 
 # Codex retries its model list in the background; repeated timeouts there mean

@@ -16,6 +16,17 @@ from delegate.adapters import codex
 ADAPTER = codex.CodexAdapter()
 
 
+def test_cache_root_on_darwin_respects_xdg_cache_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(codex.sys, "platform", "darwin")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    assert codex.cache_root() == tmp_path
+
+    monkeypatch.delenv("XDG_CACHE_HOME")
+    assert codex.cache_root() == Path.home() / "Library" / "Caches"
+
+
 class CommandOptions(TypedDict):
     project_root: Path
     prompt_path: Path
