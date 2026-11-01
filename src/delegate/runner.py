@@ -180,6 +180,15 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             command_args["temp_dir"] = temp_dir
 
         command = adapter.build_command(**command_args)
+        worker_env = os.environ.copy()
+        if temp_dir:
+            worker_env["TMPDIR"] = str(temp_dir)
+        if state["runs_commands"] and temp_dir:
+            worker_env["PYTHONPYCACHEPREFIX"] = str(temp_dir / "pycache")
+            worker_env["RUFF_CACHE_DIR"] = str(temp_dir / "ruff-cache")
+            worker_env["PYTEST_ADDOPTS"] = (
+                worker_env.get("PYTEST_ADDOPTS", "") + " -p no:cacheprovider"
+            ).strip()
 
         cancelled = False
         process: subprocess.Popen[bytes] | None = None
@@ -223,7 +232,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                         stdout=event_sink,
                         stderr=error_sink,
                         start_new_session=True,
-                        env={**os.environ, "TMPDIR": str(temp_dir)} if temp_dir else None,
+                        env=worker_env,
                     )
                 except OSError as error:
                     if resume_count:
@@ -412,6 +421,16 @@ def _result_of(state: dict[str, Any], view: diagnose.RunView) -> tuple[dict[str,
     return None, "none"
 
 
+def _save_result(task_dir: Path, result_path: Path, result: dict[str, Any]) -> None:
+    result = dict(result)
+    report = result.pop("report", None)
+    if isinstance(report, str) and report:
+        report_path = task_dir / "report.md"
+        report_path.write_text(report, encoding="utf-8")
+        result["report_path"] = str(report_path)
+    store.write_json(result_path, result)
+
+
 def _finish(
     task_dir: Path,
     state: dict[str, Any],
@@ -429,7 +448,7 @@ def _finish(
     if timed_out:
         salvaged = _salvaged_result(view, writes_allowed=writes_allowed)
         if salvaged is not None:
-            store.write_json(Path(state["result_path"]), salvaged)
+            _save_result(task_dir, Path(state["result_path"]), salvaged)
             events.emit(
                 task_dir,
                 "degraded",
@@ -487,9 +506,9 @@ def _finish(
         return
     result = envelope.sanitize(result, writes_allowed=writes_allowed)
     # So that a reader of the task finds the sanitized result in one place either way.
-    store.write_json(Path(state["result_path"]), result)
     problems = envelope.violations(result, writes_allowed=writes_allowed)
     if problems:
+        store.write_json(Path(state["result_path"]), result)
         events.emit(
             task_dir,
             "failed",
@@ -500,6 +519,7 @@ def _finish(
             **fields,
         )
         return
+    _save_result(task_dir, Path(state["result_path"]), result)
     if writes_allowed and result["status"] == "unverified" and not result["work_complete"]:
         events.emit(
             task_dir, "failed", terminal_reason="incomplete_work",

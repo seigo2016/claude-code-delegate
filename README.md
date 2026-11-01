@@ -150,9 +150,13 @@ A timeout carries the reading of where it stopped: `tool_stall`,
 A message that looks like a valid result is never promoted to one. It is kept
 beside the task.
 
-A result holds at most five strings of 300 characters per list. For a longer one,
-have a writable worker write a file and return its path. A read-only worker
-returns the five highest-priority findings and requests another bounded task.
+The Chair receives at most five strings of 300 characters per evidence list.
+Workers can return complete tables and details in `report`; delegate saves that
+text as `report.md` in the task log and returns `report_path`. `report`, `counts`, and `coverage` are required worker fields and may be null.
+`counts` is an array of `{ "name": string, "count": integer }` objects, preserved as a list
+for the Chair; coverage shows at most ten remaining items. Only a non-empty report
+creates `report.md`; `report_path` is set by delegate, not the worker.
+Large output alone is not a reason to reduce the task scope or request a decision.
 
 Roles may set \`requires_allowed_writes = true\` for patchers,
 \`forbids_allowed_writes = true\` for auditors, and
@@ -245,7 +249,8 @@ boundary, not an operating-system sandbox; the task contract still forbids
 scratch files in `.claude`, `/tmp`, and elsewhere.
 
 A role that runs tests or builds gets a writable filesystem even when it may not
-change the repository, because build tools write caches under the home directory.
+change the repository, because build tools write caches. Python and Ruff caches go under the task temporary
+directory, and pytest's cache provider is disabled.
 Nothing then stops such a run from touching the repository; the scope check above
 catches it afterwards.
 

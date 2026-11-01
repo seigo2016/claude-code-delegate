@@ -116,7 +116,7 @@ timeout には停止位置の読みが付きます。`tool_stall` / `finalizatio
 
 正しい結果に見えるだけのメッセージを、正常な結果として扱うことはありません。task directory に保存します。
 
-結果は 1 つの list につき、300 文字以内の文字列を 5 件までです。それより長い結果が必要な場合、書き込み可能な worker はファイルの path を返し、read-only worker は重要度上位 5 件と追加 task の要否を返します。
+Chair に返す evidence の list は、それぞれ 300 文字以内の文字列を 5 件までに制限します。worker は表や詳細を `report` にすべて含められます。delegate はその内容を task log の `report.md` に保存し、`report_path` を返します。`report`、`counts`、`coverage` は worker の必須項目で、不要な場合は null を指定します。`counts` は `{ "name": 文字列, "count": 整数 }` の配列で、Chair にも配列のまま返します。空でない `report` のみ `report.md` に保存し、`report_path` は delegate が設定します。未完了項目は最大 10 件表示します。出力が長いことだけを理由に作業範囲を縮めたり判断を求めたりしません。
 
 patcher には \`requires_allowed_writes = true\`、auditor には \`forbids_allowed_writes = true\` を指定できます。絶対 path、親 directory、URL を起動前に拒否する repo-local role には \`repo_local_reads = true\` を指定します。
 
@@ -173,7 +173,7 @@ sandbox が事前に止められる範囲は backend で異なります。書き
 
 カーネルで拒否するのは codex だけです。書き込みを試みると `Read-only file system` が返ります。claude では編集ツールをそもそも渡さず、試した迂回 (シェルのリダイレクト、`tee`、Python の 1 行スクリプト) はいずれも分類器が拒みました。ただしこれは境界ではなく、その都度の判断です。opencode の読み取り専用 task には、実行ごとに `edit`、`bash`、`task`、`webfetch`、`websearch` を deny した primary agent を与えます。これは OS sandbox ではなく tool permission の境界ですが、task contract でも `.claude`、`/tmp`、その他への scratch file 作成を禁止します。
 
-テストやビルドを走らせる role には、リポジトリを変更できない場合でも書き込み可能なファイルシステムを与えます。ビルドツールが home ディレクトリ配下にキャッシュを書くためです。この場合リポジトリへの書き込みを事前に止めるものはなく、上記の事後検査が検出します。
+テストやビルドを走らせる role には、リポジトリを変更できない場合でも書き込み可能なファイルシステムを与えます。ビルドツールがキャッシュを書くためです。Python と Ruff のキャッシュは task の一時 directory に置き、pytest の cache provider は無効にします。この場合リポジトリへの書き込みを事前に止めるものはなく、上記の事後検査が検出します。
 
 adapter は 3 つの CLI の出力形式に依存します。形式は実行を観測して確認したものなので、backend の更新で変わる可能性があります。
 

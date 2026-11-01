@@ -15,6 +15,7 @@ MAX_ITEMS = 5
 MAX_ITEM_CHARS = 300
 EVIDENCE_FIELDS = ("observed_facts", "verified_comparisons", "artifact_paths", "blockers")
 FIELDS = ("status", *EVIDENCE_FIELDS, "decision_needed")
+OPTIONAL_FIELDS = ("report", "counts", "coverage")
 STATUSES = ("completed", "decision_needed", "unverified")
 
 
@@ -58,6 +59,8 @@ def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
     elif result.get("status") == "completed":
         cleaned["decision_needed"] = None
 
+    for field in OPTIONAL_FIELDS:
+        cleaned[field] = result.get(field)
     return cleaned
 
 
@@ -71,7 +74,7 @@ def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
     missing = [field for field in fields if field not in result]
     if missing:
         problems.append(f"missing fields: {', '.join(missing)}")
-    unexpected = [field for field in result if field not in fields]
+    unexpected = [field for field in result if field not in (*fields, *OPTIONAL_FIELDS)]
     if unexpected:
         problems.append(f"unexpected fields: {', '.join(sorted(unexpected))}")
     if missing or unexpected:
@@ -89,6 +92,23 @@ def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
             problems.append(f"{field} holds more than {MAX_ITEMS} items")
         elif any(len(item) > MAX_ITEM_CHARS for item in value):
             problems.append(f"{field} holds an item longer than {MAX_ITEM_CHARS} characters")
+
+    if result.get("report") is not None and not isinstance(result["report"], str):
+        problems.append("report must be a string or null")
+    counts = result.get("counts")
+    if counts is not None and (not isinstance(counts, list) or any(
+        not isinstance(item, dict) or set(item) != {"name", "count"}
+        or not isinstance(item.get("name"), str) or type(item.get("count")) is not int
+        for item in counts
+    )):
+        problems.append("counts must be an array of name and integer count objects or null")
+    coverage = result.get("coverage")
+    if coverage is not None and (not isinstance(coverage, dict) or
+        set(coverage) != {"done", "total", "remaining"} or
+        type(coverage.get("done")) is not int or type(coverage.get("total")) is not int or
+        not isinstance(coverage.get("remaining"), list) or
+        not all(isinstance(item, str) for item in coverage["remaining"])):
+        problems.append("coverage must contain done, total, and remaining or be null")
 
     decision = result["decision_needed"]
     if decision is not None and not isinstance(decision, str):
@@ -157,18 +177,33 @@ def json_schema(*, writes_allowed: bool = False) -> dict[str, Any]:
         "title": "delegate result",
         "type": "object",
         "additionalProperties": False,
-        "required": [*FIELDS, *(["work_complete"] if writes_allowed else [])],
+        "required": [*FIELDS, *OPTIONAL_FIELDS, *(["work_complete"] if writes_allowed else [])],
         "properties": {
             "status": {"type": "string", "enum": list(STATUSES)},
             **{
                 field: {
                     "type": "array",
-                    "maxItems": MAX_ITEMS,
-                    "items": {"type": "string", "maxLength": MAX_ITEM_CHARS},
+                    "maxItems": 200,
+                    "items": {"type": "string", "maxLength": 4000},
                 }
                 for field in EVIDENCE_FIELDS
             },
             "decision_needed": {"type": ["string", "null"]},
+            "report": {"type": ["string", "null"]},
+            "counts": {
+                "type": ["array", "null"],
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["name", "count"],
+                    "properties": {"name": {"type": "string"}, "count": {"type": "integer"}},
+                },
+            },
+            "coverage": {
+                "type": ["object", "null"], "additionalProperties": False,
+                "required": ["done", "total", "remaining"],
+                "properties": {"done": {"type": "integer"}, "total": {"type": "integer"},
+                               "remaining": {"type": "array", "items": {"type": "string"}}},
+            },
             **({"work_complete": {"type": "boolean"}} if writes_allowed else {}),
         },
     }

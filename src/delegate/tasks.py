@@ -30,6 +30,9 @@ _SHAPE = {
     "artifact_paths": ["paths a reader should open"],
     "blockers": ["what stopped you, if anything"],
     "decision_needed": "the question only the caller can answer, or null",
+    "report": "full report text or null",
+    "counts": [{"name": "count name", "count": 0}],
+    "coverage": {"done": 0, "total": 0, "remaining": ["unfinished item"]},
     "work_complete": "boolean: whether all objective implementation is complete",
 }
 FORBIDDEN = (
@@ -87,7 +90,9 @@ def pending_completion_watches(session_id: str | None = None) -> list[dict[str, 
             continue
         if isinstance(value.get("project_root"), str) and isinstance(value.get("task_id"), str):
             try:
-                state = store.read_json(task_root(Path(value["project_root"])) / value["task_id"] / "state.json")
+                state = store.read_json(
+                    task_root(Path(value["project_root"])) / value["task_id"] / "state.json"
+                )
             except (OSError, ValueError, json.JSONDecodeError):
                 continue
             owner = state.get("submitter_session_id")
@@ -130,35 +135,29 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     if plan.denied_read_paths:
         lines.append("Do not read these paths:")
         lines.extend(f"- {path}" for path in plan.denied_read_paths)
-    lines.append("You may write only:")
-    lines.extend(f"- {item}" for item in value["allowed_writes"] or ["nothing"])
-    if value["allowed_writes"] or plan.role.runs_commands:
+    lines.append("Write permissions:")
+    if value["allowed_writes"]:
         lines.append(
-            "Create temporary files and directories only under $TMPDIR; do not create new "
-            "entries directly under allowed_write_roots except packet-named outputs."
+            "Inside the repository, write only to these canonical repository-relative paths:"
         )
+        lines.extend(f"- {item}" for item in value["allowed_writes"])
+        lines.append("Do not write a similarly named file elsewhere.")
+    else:
+        lines.append("Do not write inside the repository.")
     if plan.role.allowed_write_roots:
         lines.append("External write roots allowed by this role:")
         lines.extend(f"- {root}" for root in plan.role.allowed_write_roots)
-        if value["allowed_writes"]:
-            lines.append(
-                "Inside the repository, write only to the allowed_writes paths above. "
-                "Outside the repository, write only below the external roots above."
-            )
-        else:
-            lines.append(
-                "Do not write inside the repository. External writes are allowed only below "
-                "the roots above."
-            )
-    if value["allowed_writes"]:
         lines.append(
-            "Write only to the canonical repository-relative paths listed above. "
-            "Do not write a similarly named file elsewhere."
+            "Outside the repository, write only below these roots"
+            + (" or $TMPDIR." if value["allowed_writes"] or plan.role.runs_commands else ".")
         )
-    elif not plan.role.allowed_write_roots and not plan.role.runs_commands:
+    if value["allowed_writes"] or plan.role.runs_commands:
+        lines.append("Create temporary files and directories only under $TMPDIR.")
+    elif not plan.role.allowed_write_roots:
         lines.append(
             "This is a read-only task. Do not invoke write, edit, or patch tools; "
-            "do not create files in .claude, /tmp, or elsewhere."
+            "do not create files in .claude, /tmp, or elsewhere. "
+            "Deliver tables and catalogs in the report field, not as files."
         )
     lines.append("Do not:")
     lines.extend(f"- {item}" for item in forbidden)
@@ -185,29 +184,19 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     # Only one backend can be handed a schema, so the shape is stated here for
     # all of them. Without it a worker invents its own and the run is wasted.
     lines.append("Reply with this JSON object and nothing else. No prose, no code fence:")
-    fields = (*envelope.FIELDS, "work_complete") if value["allowed_writes"] else envelope.FIELDS
+    fields = (*envelope.FIELDS, *envelope.OPTIONAL_FIELDS)
+    if value["allowed_writes"]:
+        fields = (*fields, "work_complete")
     lines.append(json.dumps({field: _SHAPE[field] for field in fields}, indent=2))
     lines.append("")
-    overflow = (
-        "write it to a file you were allowed to write and return its path"
-        if value["allowed_writes"]
-        else "return the five highest-priority findings and set status to decision_needed "
-        "when another bounded task is required"
-    )
     lines.append(
-        f"Each list holds at most {envelope.MAX_ITEMS} strings of "
-        f"{envelope.MAX_ITEM_CHARS} characters or fewer. If the answer needs more than "
-        f"that, {overflow}."
+        "The short list limits of five items and 300 characters apply only to what the Chair "
+        "is shown. Put complete tables and details in report. "
+        "Do not shrink the requested scope or return decision_needed because output is large. "
+        "If you cannot finish, return coverage with done, total, and the remaining items listed. "
+        "Use null for report, counts, or coverage when not needed; counts is an array of name and integer count objects."
     )
-    lines.append(
-        "This is a hard validity constraint: one overlong string fails the whole task. "
-        "Keep each string within 240 characters so counting differences cannot cross the limit."
-    )
-    key_count = "seven" if value["allowed_writes"] else "six"
-    lines.append(
-        f"Before replying, check that the object has exactly these {key_count} keys and every "
-        "list has at most five items. Consolidate related facts instead of adding a sixth item."
-    )
+    lines.append("Include every listed key; do not include report_path (delegate sets it).")
     lines.append(
         "Do not include metadata keys (such as toolAction, toolSummary, reasoning) "
         "in the JSON object."

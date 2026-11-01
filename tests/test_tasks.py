@@ -45,9 +45,10 @@ def test_the_prompt_states_the_result_shape_because_most_backends_cannot_be_hand
 
     for field in envelope.FIELDS:
         assert field in prompt
-    assert "hard validity constraint" in prompt
-    assert "within 240 characters" in prompt
-    assert "exactly these six keys" in prompt
+    assert "short list limits" in prompt
+    assert "Do not shrink the requested scope" in prompt
+    assert "return decision_needed because output is large" in prompt
+    assert "remaining items listed" in prompt
     assert "return unverified instead of completed" in prompt
     assert "what could not be verified in blockers" in prompt
 
@@ -69,7 +70,7 @@ def test_a_read_only_prompt_forbids_scratch_writes_as_well_as_repository_edits(
 
     assert "This is a read-only task." in prompt
     assert "create files in .claude, /tmp, or elsewhere" in prompt
-    assert "five highest-priority findings" in prompt
+    assert "Deliver tables and catalogs in the report field, not as files" in prompt
     assert "write it to a file" not in prompt
 
 
@@ -133,10 +134,8 @@ def test_a_writable_prompt_requires_exact_repository_relative_paths(tmp_path: Pa
 
     assert "canonical repository-relative paths" in prompt
     assert "similarly named file elsewhere" in prompt
-    assert "write it to a file you were allowed to write" in prompt
     assert "Do not return until you have completed all implementation" in prompt
     assert '"work_complete"' in prompt
-    assert "exactly these seven keys" in prompt
 
 
 def test_role_instructions_are_included_in_the_prompt(tmp_path: Path) -> None:

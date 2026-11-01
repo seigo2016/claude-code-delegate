@@ -97,6 +97,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
         state["status"] == "degraded" and state.get("recovery_status") == "usable"
     ):
         result = store.read_json(Path(state["result_path"]))
+        coverage = result.get("coverage")
+        if isinstance(coverage, dict) and isinstance(coverage.get("remaining"), list):
+            result["coverage"] = {**coverage, "remaining": coverage["remaining"][:10]}
     state = events.emit(task_dir, state["status"], delivered_at=events.now_iso())
     delivery = {
         "task_id": state["task_id"],

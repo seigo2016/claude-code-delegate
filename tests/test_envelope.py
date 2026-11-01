@@ -141,3 +141,37 @@ def test_sanitize_defaults_blockers_and_decision_needed_on_completed() -> None:
 def test_from_text_extracts_json_without_code_fence() -> None:
     message = "I have launched the run and completed the task.\n" + json.dumps(valid())
     assert envelope.from_text(message) == valid()
+
+
+def test_worker_schema_is_strict_at_every_object() -> None:
+    def check(node: Any) -> None:
+        if isinstance(node, dict):
+            types = node.get("type")
+            if types == "object" or isinstance(types, list) and "object" in types:
+                assert node.get("additionalProperties") is False
+                assert set(node.get("required", [])) == set(node.get("properties", {}))
+            for value in node.values():
+                check(value)
+        elif isinstance(node, list):
+            for value in node:
+                check(value)
+
+    for writes_allowed in (False, True):
+        schema = envelope.json_schema(writes_allowed=writes_allowed)
+        check(schema)
+        props = schema["properties"]
+        assert "report_path" not in props
+        assert props["report"]["type"] == ["string", "null"]
+        assert props["counts"]["type"] == ["array", "null"]
+        assert props["coverage"]["type"] == ["object", "null"]
+
+
+def test_nullable_worker_fields_and_count_items_are_validated() -> None:
+    result = {**valid(), "report": None, "counts": None, "coverage": None}
+    assert envelope.violations(result) == []
+    result["counts"] = [{"name": "passed", "count": 3}]
+    assert envelope.violations(result) == []
+    for bad in ({"passed": 3}, [{"name": "passed", "count": True}],
+                [{"name": "passed", "count": 3, "extra": 1}]):
+        assert envelope.violations({**result, "counts": bad})
+    assert "report_path" not in envelope.sanitize({**result, "report_path": "forged"})
