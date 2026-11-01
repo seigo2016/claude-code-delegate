@@ -13,6 +13,10 @@ MAX_ITEMS = 5
 # An item is one clause. Without a length cap a worker can honour the item
 # count and still hand back a report, which is the cost we delegated to avoid.
 MAX_ITEM_CHARS = 300
+MAX_COUNTS = 20
+MAX_COUNT_NAME_CHARS = 120
+MAX_REMAINING = 10
+MAX_REMAINING_CHARS = 200
 EVIDENCE_FIELDS = ("observed_facts", "verified_comparisons", "artifact_paths", "blockers")
 FIELDS = ("status", *EVIDENCE_FIELDS, "decision_needed")
 OPTIONAL_FIELDS = ("report", "counts", "coverage")
@@ -36,32 +40,69 @@ def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
 
     if "status" in result:
         cleaned["status"] = result["status"]
-    if writes_allowed and "work_complete" in result:
-        cleaned["work_complete"] = result["work_complete"]
+    if writes_allowed:
+        cleaned["work_complete"] = result.get("work_complete")
 
     for field in EVIDENCE_FIELDS:
         if field in result:
-            val = result[field]
-            if isinstance(val, list):
-                items: list[Any] = []
-                for item in val[:MAX_ITEMS]:
-                    if isinstance(item, str) and len(item) > MAX_ITEM_CHARS:
-                        item = item[: MAX_ITEM_CHARS - 3] + "..."
-                    items.append(item)
-                cleaned[field] = items
-            else:
-                cleaned[field] = val
+            cleaned[field] = result[field]
         elif field == "blockers" and result.get("status") == "completed":
             cleaned["blockers"] = []
+    cleaned = chair_display(cleaned)
 
     if "decision_needed" in result:
         cleaned["decision_needed"] = result["decision_needed"]
     elif result.get("status") == "completed":
         cleaned["decision_needed"] = None
 
+    if writes_allowed and result.get("work_complete") is None:
+        if cleaned.get("status") == "completed":
+            cleaned["status"] = "unverified"
+        note = "Legacy result: work completion is unknown."
+        if isinstance(cleaned.get("blockers"), list) and note not in cleaned["blockers"]:
+            cleaned["blockers"] = [*cleaned["blockers"][: MAX_ITEMS - 1], note]
+
     for field in OPTIONAL_FIELDS:
         cleaned[field] = result.get(field)
     return cleaned
+
+
+def chair_display(result: dict[str, Any]) -> dict[str, Any]:
+    """Bound the result fields displayed to the Chair."""
+    result = result.copy()
+    for field in EVIDENCE_FIELDS:
+        value = result.get(field)
+        if isinstance(value, list):
+            result[field] = [
+                item[: MAX_ITEM_CHARS - 3] + "..."
+                if isinstance(item, str) and len(item) > MAX_ITEM_CHARS
+                else item
+                for item in value[:MAX_ITEMS]
+            ]
+    counts = result.get("counts")
+    if isinstance(counts, list):
+        result["counts"] = [
+            {**item, "name": item["name"][:MAX_COUNT_NAME_CHARS]} for item in counts[:MAX_COUNTS]
+        ]
+        result["counts_dropped"] = max(0, len(counts) - MAX_COUNTS)
+    coverage = result.get("coverage")
+    if isinstance(coverage, dict) and isinstance(coverage.get("remaining"), list):
+        remaining = coverage["remaining"]
+        result["coverage"] = {
+            **coverage,
+            "remaining": [item[:MAX_REMAINING_CHARS] for item in remaining[:MAX_REMAINING]],
+            "remaining_dropped": max(0, len(remaining) - MAX_REMAINING),
+        }
+    return result
+
+
+def incomplete_write_work(result: dict[str, Any], *, writes_allowed: bool) -> bool:
+    """Identify explicitly unfinished write work; legacy unknown remains distinct."""
+    return (
+        writes_allowed
+        and result.get("status") in {"completed", "unverified"}
+        and result.get("work_complete") is False
+    )
 
 
 def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
@@ -71,7 +112,7 @@ def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
 
     problems: list[str] = []
     fields = (*FIELDS, "work_complete") if writes_allowed else FIELDS
-    missing = [field for field in fields if field not in result]
+    missing = [field for field in FIELDS if field not in result]
     if missing:
         problems.append(f"missing fields: {', '.join(missing)}")
     unexpected = [field for field in result if field not in (*fields, *OPTIONAL_FIELDS)]
@@ -82,7 +123,11 @@ def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
 
     if result["status"] not in STATUSES:
         problems.append(f"status must be one of: {', '.join(STATUSES)}")
-    if writes_allowed and not isinstance(result["work_complete"], bool):
+    if (
+        writes_allowed
+        and result.get("work_complete") is not None
+        and not isinstance(result["work_complete"], bool)
+    ):
         problems.append("work_complete must be a boolean")
     for field in EVIDENCE_FIELDS:
         value = result[field]
@@ -96,18 +141,26 @@ def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
     if result.get("report") is not None and not isinstance(result["report"], str):
         problems.append("report must be a string or null")
     counts = result.get("counts")
-    if counts is not None and (not isinstance(counts, list) or any(
-        not isinstance(item, dict) or set(item) != {"name", "count"}
-        or not isinstance(item.get("name"), str) or type(item.get("count")) is not int
-        for item in counts
-    )):
+    if counts is not None and (
+        not isinstance(counts, list)
+        or any(
+            not isinstance(item, dict)
+            or set(item) != {"name", "count"}
+            or not isinstance(item.get("name"), str)
+            or type(item.get("count")) is not int
+            for item in counts
+        )
+    ):
         problems.append("counts must be an array of name and integer count objects or null")
     coverage = result.get("coverage")
-    if coverage is not None and (not isinstance(coverage, dict) or
-        set(coverage) != {"done", "total", "remaining"} or
-        type(coverage.get("done")) is not int or type(coverage.get("total")) is not int or
-        not isinstance(coverage.get("remaining"), list) or
-        not all(isinstance(item, str) for item in coverage["remaining"])):
+    if coverage is not None and (
+        not isinstance(coverage, dict)
+        or set(coverage) != {"done", "total", "remaining"}
+        or type(coverage.get("done")) is not int
+        or type(coverage.get("total")) is not int
+        or not isinstance(coverage.get("remaining"), list)
+        or not all(isinstance(item, str) for item in coverage["remaining"])
+    ):
         problems.append("coverage must contain done, total, and remaining or be null")
 
     decision = result["decision_needed"]
@@ -193,16 +246,21 @@ def json_schema(*, writes_allowed: bool = False) -> dict[str, Any]:
             "counts": {
                 "type": ["array", "null"],
                 "items": {
-                    "type": "object", "additionalProperties": False,
+                    "type": "object",
+                    "additionalProperties": False,
                     "required": ["name", "count"],
                     "properties": {"name": {"type": "string"}, "count": {"type": "integer"}},
                 },
             },
             "coverage": {
-                "type": ["object", "null"], "additionalProperties": False,
+                "type": ["object", "null"],
+                "additionalProperties": False,
                 "required": ["done", "total", "remaining"],
-                "properties": {"done": {"type": "integer"}, "total": {"type": "integer"},
-                               "remaining": {"type": "array", "items": {"type": "string"}}},
+                "properties": {
+                    "done": {"type": "integer"},
+                    "total": {"type": "integer"},
+                    "remaining": {"type": "array", "items": {"type": "string"}},
+                },
             },
             **({"work_complete": {"type": "boolean"}} if writes_allowed else {}),
         },

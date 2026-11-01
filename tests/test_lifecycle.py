@@ -33,11 +33,14 @@ def test_task_temp_and_root_warnings(workspace: Workspace, tmp_path: Path, isola
     workspace.env["FAKE_TEMP_RECORD"] = str(tmp_path / "temp-record")
     workspace.env["FAKE_ROOT"] = str(workspace.repo)
     workspace.settings.write_text(
-        workspace.settings.read_text().replace(
+        workspace.settings.read_text()
+        .replace(
             'adapter = "codex"', f'adapter = "codex"\nisolate_home = {str(isolated).lower()}', 1
-        ).replace(
+        )
+        .replace(
             '[roles.bounded-implementer]\nlevel = "standard"',
-            f'[roles.bounded-implementer]\nlevel = "standard"\nallowed_write_roots = ["{workspace.repo}"]',
+            '[roles.bounded-implementer]\nlevel = "standard"\n'
+            f'allowed_write_roots = ["{workspace.repo}"]',
         )
     )
     workspace.mode("temporary_and_root_entries")
@@ -46,12 +49,16 @@ def test_task_temp_and_root_warnings(workspace: Workspace, tmp_path: Path, isola
     state = wait_for_terminal(workspace, handle["task_id"])
     temp = tmp_path / "cache" / "tmp" / handle["task_id"]
     assert Path(workspace.env["FAKE_TEMP_RECORD"]).read_text() == str(temp)
-    roots_arg = next(x for x in workspace.calls()[0] if x.startswith("sandbox_workspace_write.writable_roots="))
+    roots_arg = next(
+        x for x in workspace.calls()[0] if x.startswith("sandbox_workspace_write.writable_roots=")
+    )
     assert str(temp) in json.loads(roots_arg.split("=", 1)[1])
     assert not temp.exists()
     assert state["status"] == "completed"
     delivery = workspace.run("collect", handle["task_id"])
-    assert delivery["runtime_warnings"] == [f"New entry in allowed_write_root: {workspace.repo / 'smoke-test-123'}"]
+    assert delivery["runtime_warnings"] == [
+        f"New entry in allowed_write_root: {workspace.repo / 'smoke-test-123'}"
+    ]
 
 
 def test_configured_temp_root(workspace: Workspace, tmp_path: Path) -> None:
@@ -66,13 +73,17 @@ def test_configured_temp_root(workspace: Workspace, tmp_path: Path) -> None:
     state = wait_for_terminal(workspace, handle["task_id"])
     temp = temp_root / handle["task_id"]
     assert record.read_text() == str(temp)
-    roots_arg = next(x for x in workspace.calls()[0] if x.startswith("sandbox_workspace_write.writable_roots="))
+    roots_arg = next(
+        x for x in workspace.calls()[0] if x.startswith("sandbox_workspace_write.writable_roots=")
+    )
     assert str(temp) in json.loads(roots_arg.split("=", 1)[1])
     assert state["status"] == "completed"
     assert temp_root.is_dir() and not temp.exists()
 
 
-def test_command_only_task_removes_temp_on_cancellation(workspace: Workspace, tmp_path: Path) -> None:
+def test_command_only_task_removes_temp_on_cancellation(
+    workspace: Workspace, tmp_path: Path
+) -> None:
     workspace.env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
     record = tmp_path / "temp-record"
     workspace.env["FAKE_TEMP_RECORD"] = str(record)
@@ -428,16 +439,19 @@ def test_incomplete_codex_session_resumes_to_completion(workspace: Workspace) ->
     assert state["resume_count"] == 1
     assert state["resume_results"][0]["result"]["work_complete"] is True
     assert calls[1][-3:] == ["resume", "session-1", "-"]
-    assert calls[0][calls[0].index("--output-schema") + 1] == (
-        calls[1][calls[1].index("--output-schema") + 1]
+    assert (
+        calls[0][calls[0].index("--output-schema") + 1]
+        == (calls[1][calls[1].index("--output-schema") + 1])
     )
     assert "blockers" in (Path(state["task_dir"]) / "resume-prompt.md").read_text()
 
 
 def test_resume_limit_stops_different_blockers(workspace: Workspace) -> None:
-    workspace.settings.write_text(workspace.settings.read_text().replace(
-        'adapter = "codex"', 'adapter = "codex"\nresume_limit = 1'
-    ))
+    workspace.settings.write_text(
+        workspace.settings.read_text().replace(
+            'adapter = "codex"', 'adapter = "codex"\nresume_limit = 1'
+        )
+    )
     workspace.mode("resume_limit")
     packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
     handle = workspace.submit(packet=packet, role="bounded-implementer")
@@ -473,6 +487,7 @@ def test_default_resume_limit_allows_two_attempts(workspace: Workspace) -> None:
     assert state["failure_class"] == "incomplete_work"
     assert state["resume_count"] == 2
     assert [result["result"]["blockers"] for result in state["resume_results"]] == [
-        ["blocker-1"], ["blocker-2"]
+        ["blocker-1"],
+        ["blocker-2"],
     ]
     assert len(workspace.calls()) == 3

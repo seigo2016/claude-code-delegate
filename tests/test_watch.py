@@ -148,9 +148,19 @@ def test_pending_submissions_are_delivered_only_to_their_sessions(
     second = workspace.submit(title="second")
 
     start = subprocess.run(
-        [sys.executable, "-m", "delegate", "_hook-reconcile", "--project-root", str(workspace.repo)],
-        input=json.dumps({"session_id": "session-2"}), capture_output=True, text=True,
-        env=workspace.env, cwd=tmp_path,
+        [
+            sys.executable,
+            "-m",
+            "delegate",
+            "_hook-reconcile",
+            "--project-root",
+            str(workspace.repo),
+        ],
+        input=json.dumps({"session_id": "session-2"}),
+        capture_output=True,
+        text=True,
+        env=workspace.env,
+        cwd=tmp_path,
     )
     assert start.returncode == 0
     assert {item["task_id"] for item in json.loads(start.stdout)["tasks"]} == {second["task_id"]}
@@ -160,7 +170,9 @@ def test_pending_submissions_are_delivered_only_to_their_sessions(
     result = hook_watch(workspace, "filtered", cwd=tmp_path, session_id="session-1", seconds="20")
     assert result.returncode == WAKE
     assert [item["task_id"] for item in json.loads(result.stdout)["ready"]] == [first["task_id"]]
-    result = hook_watch(workspace, json.dumps(first), cwd=tmp_path, session_id="session-2", seconds="0")
+    result = hook_watch(
+        workspace, json.dumps(first), cwd=tmp_path, session_id="session-2", seconds="0"
+    )
     assert result.returncode == WAKE
     assert all(item["task_id"] != first["task_id"] for item in json.loads(result.stdout)["ready"])
 

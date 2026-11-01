@@ -2,15 +2,34 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
 from delegate.adapters import codex
 
 ADAPTER = codex.CodexAdapter()
+
+
+class CommandOptions(TypedDict):
+    project_root: Path
+    prompt_path: Path
+    result_path: Path
+    schema_path: Path
+    model: str
+    effort: str
+    writes_allowed: bool
+    runs_commands: bool
+
+
+def isolated(base: Path, source: Path) -> Path:
+    key = hashlib.sha256(os.fsencode(str(source.resolve()))).hexdigest()[:24]
+    return base / key
 
 
 def test_a_repeated_model_refresh_failure_is_a_runtime_warning() -> None:
@@ -43,15 +62,24 @@ def test_the_command_pins_the_root_the_result_contract_and_full_reasoning(tmp_pa
 
 
 def test_resume_preserves_isolated_home_and_original_options(tmp_path: Path) -> None:
-    adapter = codex.CodexAdapter(isolate_home=True, target_home=tmp_path / "isolated",
-                           user_home=tmp_path / "user")
-    options = dict(project_root=tmp_path, prompt_path=tmp_path / "prompt",
-                   result_path=tmp_path / "result", schema_path=tmp_path / "schema",
-                   model="model", effort="high", writes_allowed=True, runs_commands=False)
+    adapter = codex.CodexAdapter(
+        isolate_home=True, target_home=tmp_path / "isolated", user_home=tmp_path / "user"
+    )
+    options: CommandOptions = dict(
+        project_root=tmp_path,
+        prompt_path=tmp_path / "prompt",
+        result_path=tmp_path / "result",
+        schema_path=tmp_path / "schema",
+        model="model",
+        effort="high",
+        writes_allowed=True,
+        runs_commands=False,
+    )
     initial = adapter.build_command(**options)
     resumed = adapter.build_resume_command(session_id="session-1", **options)
     assert resumed == [*initial[:-1], "resume", "session-1", "-"]
-    assert resumed[:2] == ["env", f"CODEX_HOME={tmp_path / 'isolated'}"]
+    expected = isolated(tmp_path / "isolated", tmp_path / "user")
+    assert resumed[:2] == ["env", f"CODEX_HOME={expected}"]
 
 
 def test_external_write_roots_are_added_to_the_codex_sandbox(tmp_path: Path) -> None:
@@ -93,7 +121,7 @@ def test_codex_home_points_to_dedicated_dir(
         runs_commands=False,
     )
 
-    expected_home = cache_dir / "delegate" / "codex-home"
+    expected_home = isolated(cache_dir / "delegate" / "codex-home", tmp_path / "user_codex")
     assert command[:2] == ["env", f"CODEX_HOME={expected_home}"]
     assert expected_home.is_dir()
 
@@ -123,7 +151,7 @@ def test_auth_json_is_symlink_without_reading_contents(
             writes_allowed=True,
             runs_commands=False,
         )
-        isolated_home = cache_dir / "delegate" / "codex-home"
+        isolated_home = isolated(cache_dir / "delegate" / "codex-home", user_home)
         link_path = isolated_home / "auth.json"
         assert link_path.is_symlink()
         assert Path(os.readlink(link_path)) == auth_file.resolve()
@@ -140,7 +168,7 @@ def test_agents_md_is_absent_and_minimal_config_written(
     (user_home / "config.toml").write_text('personality = "chatty"\n', encoding="utf-8")
 
     cache_dir = tmp_path / "cache"
-    isolated_home = cache_dir / "delegate" / "codex-home"
+    isolated_home = isolated(cache_dir / "delegate" / "codex-home", user_home)
     isolated_home.mkdir(parents=True)
     # Pre-populate dirty AGENTS.md in isolated home to ensure it gets removed
     dirty_agents = isolated_home / "AGENTS.md"
@@ -173,7 +201,7 @@ def test_broken_symlink_is_recreated(tmp_path: Path, monkeypatch: pytest.MonkeyP
     auth_file.write_text('{"token": "valid"}', encoding="utf-8")
 
     cache_dir = tmp_path / "cache"
-    isolated_home = cache_dir / "delegate" / "codex-home"
+    isolated_home = isolated(cache_dir / "delegate" / "codex-home", user_home)
     isolated_home.mkdir(parents=True)
     broken_link = isolated_home / "auth.json"
     broken_link.symlink_to(tmp_path / "does_not_exist" / "auth.json")
@@ -242,3 +270,57 @@ standard = { model = "terra", effort = "high" }
         runs_commands=False,
     )
     assert command_from_config[:4] == ["codex", "exec", "-C", str(tmp_path)]
+
+
+@pytest.mark.parametrize("relation", ["same", "source_parent", "target_parent", "symlink"])
+def test_overlapping_homes_fall_back_without_modifying_source(
+    tmp_path: Path, relation: str
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "config.toml").write_text("original")
+    (source / "AGENTS.md").write_text("instructions")
+    if relation == "same":
+        base = source
+    elif relation == "source_parent":
+        base = source / "child"
+    elif relation == "target_parent":
+        base = tmp_path
+    else:
+        base = tmp_path / "alias"
+        base.symlink_to(source, target_is_directory=True)
+    adapter = codex.CodexAdapter(target_home=base, user_home=source)
+    with pytest.warns(UserWarning, match="overlap"):
+        command = adapter.build_command(
+            project_root=tmp_path,
+            prompt_path=tmp_path / "prompt",
+            result_path=tmp_path / "result",
+            schema_path=tmp_path / "schema",
+            model="m",
+            effort="high",
+            writes_allowed=False,
+            runs_commands=False,
+        )
+    assert command[0] == "codex"
+    assert (source / "config.toml").read_text() == "original"
+    assert (source / "AGENTS.md").read_text() == "instructions"
+
+
+def test_concurrent_preparation_separates_sources_and_is_atomic(tmp_path: Path) -> None:
+    base = tmp_path / "isolated"
+    sources = [tmp_path / "user1", tmp_path / "user2"]
+    for source in sources:
+        source.mkdir()
+        (source / "auth.json").write_text(source.name)
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        homes = list(
+            pool.map(
+                lambda source: codex.prepare_codex_home(target_home=base, user_home=source),
+                sources * 40,
+            )
+        )
+    assert homes[0] != homes[1]
+    for source, home in zip(sources * 40, homes, strict=True):
+        assert home is not None
+        assert (home / "auth.json").resolve() == source / "auth.json"
+        assert (home / "config.toml").read_text() == codex.MINIMAL_CONFIG

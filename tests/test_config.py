@@ -76,7 +76,7 @@ def test_top_level_denied_read_paths_are_loaded(tmp_path: Path) -> None:
     assert settings.denied_read_paths == ("/srv/private",)
 
 
-@pytest.mark.parametrize("value", ['"relative/path"', '42', '""'])
+@pytest.mark.parametrize("value", ['"relative/path"', "42", '""'])
 def test_temp_root_requires_absolute_path(tmp_path: Path, value: str) -> None:
     with pytest.raises(config.ConfigError, match="temp_root must be an absolute path"):
         load(tmp_path, f"temp_root = {value}\n" + SETTINGS)
@@ -243,7 +243,7 @@ def test_worker_isolate_home_must_be_boolean(tmp_path: Path) -> None:
         load(tmp_path, text)
 
 
-@pytest.mark.parametrize("value", ['-1', 'true', '"2"'])
+@pytest.mark.parametrize("value", ["-1", "true", '"2"'])
 def test_resume_limit_rejects_invalid_values(tmp_path: Path, value: str) -> None:
     invalid = SETTINGS.replace('adapter = "codex"', f'adapter = "codex"\nresume_limit = {value}')
     with pytest.raises(config.ConfigError, match="resume_limit must be a non-negative integer"):

@@ -84,18 +84,19 @@ def _keep_last_message(
         "last_agent_message_path": str(message_path),
     }
     parsed = envelope.from_text(view.last_agent_message)
-    if parsed is not None and not envelope.violations(
-        envelope.sanitize(parsed, writes_allowed=writes_allowed), writes_allowed=writes_allowed
-    ) and not (
-        writes_allowed
-        and parsed.get("status") == "unverified"
-        and parsed.get("work_complete") is False
+    if (
+        parsed is not None
+        and not envelope.violations(
+            envelope.sanitize(parsed, writes_allowed=writes_allowed), writes_allowed=writes_allowed
+        )
+        and not envelope.incomplete_write_work(parsed, writes_allowed=writes_allowed)
     ):
         recovered = task_dir / "recovered-result.json"
         raw_result = envelope.from_text(view.last_agent_message)
         sanitized = (
             envelope.sanitize(raw_result, writes_allowed=writes_allowed)
-            if raw_result is not None else {}
+            if raw_result is not None
+            else {}
         )
         store.write_json(recovered, sanitized)
         fields["recovery_status"] = "usable"
@@ -149,7 +150,10 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             temp_dir = temp_root / state["task_id"]
             temp_dir.mkdir(parents=True, exist_ok=True)
         state = events.emit(
-            task_dir, "running", started_at=events.now_iso(), root_entries_before=roots_before,
+            task_dir,
+            "running",
+            started_at=events.now_iso(),
+            root_entries_before=roots_before,
             temp_dir=str(temp_dir) if temp_dir is not None else None,
         )
         project_root = Path(state["project_root"])
@@ -292,15 +296,25 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                 sanitized, writes_allowed=True
             )
             incomplete = bool(
-                valid and sanitized["status"] == "unverified" and not sanitized["work_complete"]
+                valid and envelope.incomplete_write_work(sanitized, writes_allowed=True)
             )
             if resume_count:
                 resume_results[-1].update(
-                    outcome=("cancelled" if cancelled or _cancellation_recorded(task_dir) else
-                             "timeout" if timed_out else "nonzero_exit" if exit_code else
-                             "write_scope_violation" if fields["unauthorized_writes"] else
-                             "incomplete_work" if incomplete else
-                             str(sanitized["status"]) if valid else "invalid_or_empty_result"),
+                    outcome=(
+                        "cancelled"
+                        if cancelled or _cancellation_recorded(task_dir)
+                        else "timeout"
+                        if timed_out
+                        else "nonzero_exit"
+                        if exit_code
+                        else "write_scope_violation"
+                        if fields["unauthorized_writes"]
+                        else "incomplete_work"
+                        if incomplete
+                        else str(sanitized["status"])
+                        if valid
+                        else "invalid_or_empty_result"
+                    ),
                     result=sanitized,
                     exit_code=exit_code,
                 )
@@ -308,11 +322,17 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             blockers = sorted(sanitized["blockers"]) if incomplete else None
             repeated = previous_blockers is not None and blockers == previous_blockers
             if (
-                incomplete and state["writes_allowed"] and state["adapter"] == "codex"
-                and view.session_id and not repeated
+                incomplete
+                and state["writes_allowed"]
+                and state["adapter"] == "codex"
+                and view.session_id
+                and not repeated
                 and resume_count < int(state.get("resume_limit", 2))
-                and not cancelled and not _cancellation_recorded(task_dir) and not timed_out
-                and exit_code == 0 and not fields["unauthorized_writes"]
+                and not cancelled
+                and not _cancellation_recorded(task_dir)
+                and not timed_out
+                and exit_code == 0
+                and not fields["unauthorized_writes"]
                 and time.monotonic() < deadline
             ):
                 original_session_id = original_session_id or view.session_id
@@ -331,7 +351,8 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                     "previous answer until all implementation is complete. Return only when all "
                     "is complete or a decision is needed. Create temporary files and directories "
                     "only under $TMPDIR; do not create new entries directly under "
-                    "allowed_write_roots except packet-named outputs.\n", encoding="utf-8"
+                    "allowed_write_roots except packet-named outputs.\n",
+                    encoding="utf-8",
                 )
                 Path(state["result_path"]).unlink(missing_ok=True)
                 view = diagnose.RunView(
@@ -402,7 +423,7 @@ def _salvaged_result(
     result = envelope.sanitize(parsed, writes_allowed=writes_allowed)
     if envelope.violations(result, writes_allowed=writes_allowed):
         return None
-    if writes_allowed and result["status"] == "unverified" and result["work_complete"] is False:
+    if envelope.incomplete_write_work(result, writes_allowed=writes_allowed):
         return None
     return result
 
@@ -520,10 +541,13 @@ def _finish(
         )
         return
     _save_result(task_dir, Path(state["result_path"]), result)
-    if writes_allowed and result["status"] == "unverified" and not result["work_complete"]:
+    if envelope.incomplete_write_work(result, writes_allowed=writes_allowed):
         events.emit(
-            task_dir, "failed", terminal_reason="incomplete_work",
-            failure_class="incomplete_work", **fields
+            task_dir,
+            "failed",
+            terminal_reason="incomplete_work",
+            failure_class="incomplete_work",
+            **fields,
         )
         return
     terminal = (

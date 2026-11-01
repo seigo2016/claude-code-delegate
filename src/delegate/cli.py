@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-from delegate import config, events, liveness, runner, store, tasks
+from delegate import config, envelope, events, liveness, runner, store, tasks
 
 WATCH_POLL_SEC = 1.0
 # How long a supervisor may take to claim its lock before we believe it is gone.
@@ -96,10 +96,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     if state["status"] in {"completed", "decision_needed", "unverified"} or (
         state["status"] == "degraded" and state.get("recovery_status") == "usable"
     ):
-        result = store.read_json(Path(state["result_path"]))
-        coverage = result.get("coverage")
-        if isinstance(coverage, dict) and isinstance(coverage.get("remaining"), list):
-            result["coverage"] = {**coverage, "remaining": coverage["remaining"][:10]}
+        result = envelope.chair_display(store.read_json(Path(state["result_path"])))
     state = events.emit(task_dir, state["status"], delivered_at=events.now_iso())
     delivery = {
         "task_id": state["task_id"],
@@ -197,8 +194,10 @@ def _reconcile_state(state: dict[str, Any]) -> dict[str, Any]:
 def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> int:
     project_root = _root(args.project_root)
     reconciled = [
-        _reconcile_state(state) for state in _states(project_root)
-        if not session_id or not state.get("submitter_session_id")
+        _reconcile_state(state)
+        for state in _states(project_root)
+        if not session_id
+        or not state.get("submitter_session_id")
         or state["submitter_session_id"] == session_id
     ]
     ready = [
@@ -415,7 +414,8 @@ def cmd_hook_watch(args: argparse.Namespace) -> int:
         registered = tasks.pending_completion_watches(session_id)
         submitted = (
             _watch_tasks_from_handles([*handles, *registered], session_id)
-            if (handles or registered) else []
+            if (handles or registered)
+            else []
         )
         watched = _watch_tasks_from_handles(
             [*_read_session_watches(session_id), *handles, *registered], session_id

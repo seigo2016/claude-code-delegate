@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
+import tempfile
 import tomllib
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -31,43 +34,35 @@ def delegate_codex_home() -> Path:
     return (Path.home() / ".cache" / "delegate" / "codex-home").resolve(strict=False)
 
 
-def ensure_auth_symlink(isolated_dir: Path, source_auth: Path) -> None:
-    link_path = isolated_dir / "auth.json"
-    source = source_auth.expanduser().resolve(strict=False)
-    if link_path.is_symlink():
-        try:
-            target = Path(os.readlink(link_path)).resolve(strict=False)
-            if target == source and (link_path.exists() or not source.exists()):
-                return
-        except OSError:
-            pass
-        link_path.unlink(missing_ok=True)
-    elif link_path.exists():
-        link_path.unlink()
-    link_path.symlink_to(source)
-
-
 def prepare_codex_home(
     *,
     target_home: Path | None = None,
     user_home: Path | None = None,
-) -> Path:
-    target = target_home if target_home is not None else delegate_codex_home()
-    source_home = user_home if user_home is not None else user_codex_home()
+) -> Path | None:
+    base = (target_home if target_home is not None else delegate_codex_home()).resolve()
+    source = (user_home if user_home is not None else user_codex_home()).resolve()
+    if base == source or base in source.parents or source in base.parents:
+        warnings.warn(
+            "Codex home isolation disabled: source and isolation paths overlap", stacklevel=2
+        )
+        return None
 
+    key = hashlib.sha256(os.fsencode(str(source))).hexdigest()[:24]
+    target = (base / key).resolve()
+    if target == source or target in source.parents or source in target.parents:
+        warnings.warn(
+            "Codex home isolation disabled: source and isolation paths overlap", stacklevel=2
+        )
+        return None
     target.mkdir(parents=True, exist_ok=True)
-
-    if target.resolve(strict=False) != source_home.resolve(strict=False):
-        ensure_auth_symlink(target, source_home / "auth.json")
-
-    config_path = target / "config.toml"
-    if not config_path.exists() or config_path.read_text(encoding="utf-8") != MINIMAL_CONFIG:
-        config_path.write_text(MINIMAL_CONFIG, encoding="utf-8")
-
-    agents_path = target / "AGENTS.md"
-    if agents_path.exists() or agents_path.is_symlink():
-        agents_path.unlink()
-
+    # Unique temporary names and atomic replacements keep simultaneous preparations safe.
+    with tempfile.TemporaryDirectory(dir=target, prefix=".prepare-") as temporary:
+        temp = Path(temporary)
+        (temp / "auth.json").symlink_to((source / "auth.json").resolve())
+        (temp / "config.toml").write_text(MINIMAL_CONFIG, encoding="utf-8")
+        os.replace(temp / "auth.json", target / "auth.json")
+        os.replace(temp / "config.toml", target / "config.toml")
+    (target / "AGENTS.md").unlink(missing_ok=True)
     return target
 
 
@@ -166,9 +161,17 @@ class CodexAdapter:
         # afterwards, not the sandbox.
         writable = writes_allowed or runs_commands
         roots = (
-            json.dumps(list(dict.fromkeys([
-                str(cache_root()), *allowed_write_roots, *([str(temp_dir)] if temp_dir else [])
-            ])))
+            json.dumps(
+                list(
+                    dict.fromkeys(
+                        [
+                            str(cache_root()),
+                            *allowed_write_roots,
+                            *([str(temp_dir)] if temp_dir else []),
+                        ]
+                    )
+                )
+            )
             if writable
             else "[]"
         )
@@ -215,6 +218,8 @@ class CodexAdapter:
             target_home=self.target_home,
             user_home=self.user_home,
         )
+        if codex_home_dir is None:
+            return ["env", *env, *base_cmd] if env else base_cmd
         return ["env", f"CODEX_HOME={codex_home_dir}", *env, *base_cmd]
 
     def build_resume_command(self, *, session_id: str, **kwargs: Any) -> list[str]:

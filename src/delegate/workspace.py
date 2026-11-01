@@ -42,14 +42,19 @@ def root_entries(roots: Iterable[str]) -> dict[str, list[str]]:
     return result
 
 
-def new_root_entries(before: dict[str, list[str]], project_root: Path, allowed: list[str]) -> list[str]:
+def new_root_entries(
+    before: dict[str, list[str]], project_root: Path, allowed: list[str]
+) -> list[str]:
     after = root_entries(before)
     outputs = [Path(os.path.abspath(project_root / path)) for path in allowed]
     warnings = []
     for root, names in before.items():
         for name in sorted(set(after.get(root, ())) - set(names)):
             path = Path(os.path.abspath(Path(root) / name))
-            if any(path == output or path in output.parents or output in path.parents for output in outputs):
+            if any(
+                path == output or path in output.parents or output in path.parents
+                for output in outputs
+            ):
                 continue
             warnings.append(f"New entry in allowed_write_root: {path}")
     return warnings

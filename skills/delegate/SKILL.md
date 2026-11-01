@@ -50,13 +50,13 @@ The backend is chosen for you too. `--worker <name>` overrides it for one task: 
 
 Submitting the same packet twice while the first is still running gives you that same task back, marked `deduplicated`. After it has finished, a repeat submit starts a new task.
 
-**A result holds at most five short strings per list.** That cap is the point: a worker that hands back forty lines has moved the reading back into this session. When the result is genuinely a long list, such as an inventory or every occurrence of something, ask for it as a file and let the worker return the path:
+**A result holds at most five short strings per list.** That cap is the point: a worker that hands back forty lines has moved the reading back into this session. When the result is genuinely a long list, such as an inventory or every occurrence of something, request the full list in report:
 
 ```json
 {
-  "objective": "Write an inventory of every module under src/ to docs/inventory.md, one line each.",
-  "allowed_writes": ["docs/inventory.md"],
-  "required_evidence": ["module count", "the path written"]
+  "objective": "List every module under src/ in report, one line each.",
+  "allowed_writes": [],
+  "required_evidence": ["module count"]
 }
 ```
 
@@ -82,9 +82,9 @@ delegate collect <task-id> --project-root <project-root>
 
 Read `status` on what comes back before you read `result`:
 
-- `completed` — evidence you can use.
+- `completed` — assess the evidence; `unverified` — report the verification gap.
 - `decision_needed` — the worker stopped on a judgement that is yours to make. Answer it here.
-- `failed`, `timeout`, `orphaned`, `degraded` — **the work did not happen.** Say so, look at the artifact paths in the envelope, and decide what to do. Never present a failed task's partial output as a finding.
+- `failed`, `timeout`, `orphaned`, `degraded` — **The task did not complete; inspect artifacts and treat partial results as unverified.**
 
 A timeout carries a `failure_class` saying where it stopped, and a worker that produced a usable-looking final message without delivering it has that message kept aside. It is kept aside on purpose: read it yourself before you trust it.
 

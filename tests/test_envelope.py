@@ -42,13 +42,14 @@ def test_an_unverified_result_is_accepted_as_distinct_from_completed() -> None:
 def test_writable_contract_requires_a_boolean_work_complete() -> None:
     assert "work_complete" in envelope.json_schema(writes_allowed=True)["required"]
     assert "work_complete" not in envelope.json_schema()["required"]
-    assert envelope.violations(valid(), writes_allowed=True) == ["missing fields: work_complete"]
+    assert envelope.violations(valid(), writes_allowed=True) == []
     assert envelope.violations({**valid(), "work_complete": "yes"}, writes_allowed=True) == [
         "work_complete must be a boolean"
     ]
-    assert envelope.sanitize({**valid(), "work_complete": False}, writes_allowed=True)[
-        "work_complete"
-    ] is False
+    assert (
+        envelope.sanitize({**valid(), "work_complete": False}, writes_allowed=True)["work_complete"]
+        is False
+    )
 
 
 def test_unknown_and_missing_keys_are_named_in_the_violation() -> None:
@@ -171,7 +172,24 @@ def test_nullable_worker_fields_and_count_items_are_validated() -> None:
     assert envelope.violations(result) == []
     result["counts"] = [{"name": "passed", "count": 3}]
     assert envelope.violations(result) == []
-    for bad in ({"passed": 3}, [{"name": "passed", "count": True}],
-                [{"name": "passed", "count": 3, "extra": 1}]):
+    for bad in (
+        {"passed": 3},
+        [{"name": "passed", "count": True}],
+        [{"name": "passed", "count": 3, "extra": 1}],
+    ):
         assert envelope.violations({**result, "counts": bad})
     assert "report_path" not in envelope.sanitize({**result, "report_path": "forged"})
+
+
+def test_legacy_write_result_has_unknown_completion_and_blocker() -> None:
+    result = envelope.sanitize(valid(), writes_allowed=True)
+    assert result["work_complete"] is None
+    assert result["status"] == "unverified"
+    assert "unknown" in result["blockers"][-1]
+    assert envelope.violations(result, writes_allowed=True) == []
+
+
+def test_unknown_completion_cannot_be_reported_completed() -> None:
+    result = envelope.sanitize({**valid(), "work_complete": None}, writes_allowed=True)
+    assert result["status"] == "unverified"
+    assert envelope.sanitize(result, writes_allowed=True) == result

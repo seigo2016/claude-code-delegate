@@ -13,8 +13,10 @@ def test_schema_and_sanitization() -> None:
     assert props["observed_facts"]["maxItems"] >= 200
     assert props["observed_facts"]["items"]["maxLength"] >= 4000
     assert all(key in props for key in ("report", "counts", "coverage"))
-    result = {"observed_facts": ["x" * 400] * 8, "coverage": {
-        "done": 1, "total": 20, "remaining": [str(i) for i in range(19)]}}
+    result = {
+        "observed_facts": ["x" * 400] * 8,
+        "coverage": {"done": 1, "total": 20, "remaining": [str(i) for i in range(19)]},
+    }
     clean = envelope.sanitize(result)
     assert len(clean["observed_facts"]) == 5
     assert len(clean["observed_facts"][0]) == 300
@@ -28,15 +30,20 @@ def test_report_collection_and_command_environment(workspace: Workspace, tmp_pat
     worker = workspace.worker_path
     script = worker.read_text()
     script = script.replace(
-        'event({"type": "thread.started",', '''names = ("TMPDIR", "PYTHONPYCACHEPREFIX",
+        'event({"type": "thread.started",',
+        """names = ("TMPDIR", "PYTHONPYCACHEPREFIX",
          "RUFF_CACHE_DIR", "PYTEST_ADDOPTS")
 pathlib.Path(os.environ["REPORT_ENV"]).write_text(
     json.dumps({k: os.environ.get(k) for k in names}))
-event({"type": "thread.started",''')
+event({"type": "thread.started",""",
+    )
     script = script.replace(
-        'if "--output-schema" in args:', '''good.update(report="R" * 50000, counts=[{"name": "pass", "count": 3}],
+        'if "--output-schema" in args:',
+        """good.update(report="R" * 50000,
+            counts=[{"name": "pass", "count": 3}],
             coverage={"done": 3, "total": 15, "remaining": [str(i) for i in range(12)]})
-if "--output-schema" in args:''')
+if "--output-schema" in args:""",
+    )
     worker.write_text(script)
     handle = workspace.submit(role="verification-runner")
     state = wait_for_terminal(workspace, handle["task_id"])
@@ -66,3 +73,23 @@ def test_empty_or_null_report_does_not_create_report_file(tmp_path: Path) -> Non
         assert "report" not in saved
         assert "report_path" not in saved
         assert not (tmp_path / "report.md").exists()
+
+
+def test_collect_bounds_counts_and_remaining(workspace: Workspace) -> None:
+    worker = workspace.worker_path
+    script = worker.read_text().replace(
+        'if "--output-schema" in args:',
+        'good.update(counts=[{"name": "n" * 200, "count": i} for i in range(25)], '
+        'coverage={"done": 0, "total": 14, "remaining": ["r" * 300] * 14})\n'
+        'if "--output-schema" in args:',
+    )
+    worker.write_text(script)
+    handle = workspace.submit(role="verification-runner")
+    wait_for_terminal(workspace, handle["task_id"])
+    result = workspace.run("collect", handle["task_id"])["result"]
+    assert len(result["counts"]) == 20
+    assert all(len(item["name"]) == 120 for item in result["counts"])
+    assert result["counts_dropped"] == 5
+    assert len(result["coverage"]["remaining"]) == 10
+    assert all(len(item) == 200 for item in result["coverage"]["remaining"])
+    assert result["coverage"]["remaining_dropped"] == 4

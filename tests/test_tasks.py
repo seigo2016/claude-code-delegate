@@ -136,6 +136,9 @@ def test_a_writable_prompt_requires_exact_repository_relative_paths(tmp_path: Pa
     assert "similarly named file elsewhere" in prompt
     assert "Do not return until you have completed all implementation" in prompt
     assert '"work_complete"' in prompt
+    assert "If blocked, report the incomplete work and the blocker." in prompt
+    assert "Only decision_needed may stop" not in prompt
+    assert "reply with the JSON object directly" not in prompt
 
 
 def test_role_instructions_are_included_in_the_prompt(tmp_path: Path) -> None:
@@ -505,3 +508,14 @@ def test_an_existing_external_write_root_passes_preflight(tmp_path: Path) -> Non
     handle = submit_with(role, tmp_path)
 
     assert handle["role"] == "runner"
+
+
+def test_skill_reports_incomplete_and_unverified_results() -> None:
+    skill = (Path(__file__).resolve().parents[1] / "skills/delegate/SKILL.md").read_text()
+    assert "request the full list in report" in skill
+    assert "`completed` — assess the evidence; `unverified` — report the verification gap" in skill
+    assert (
+        "The task did not complete; inspect artifacts and treat partial results as unverified."
+        in skill
+    )
+    assert "the work did not happen" not in skill

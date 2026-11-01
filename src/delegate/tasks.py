@@ -67,8 +67,10 @@ def _completion_watch_registry_root() -> Path:
 
 def _completion_watch_path(project_root: Path, task_id: str) -> Path:
     identity = f"{project_root}\0{task_id}".encode()
-    return _completion_watch_registry_root() / "pending-submissions" / (
-        hashlib.sha256(identity).hexdigest() + ".json"
+    return (
+        _completion_watch_registry_root()
+        / "pending-submissions"
+        / (hashlib.sha256(identity).hexdigest() + ".json")
     )
 
 
@@ -169,8 +171,8 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     if value["allowed_writes"]:
         lines.append(
             "Do not return until you have completed all implementation of the objective. "
-            "Only decision_needed may stop you from implementing. Do not return with incomplete "
-            "implementation in blockers. After implementation is complete, return unverified "
+            "If blocked, report the incomplete work and the blocker. "
+            "After implementation is complete, return unverified "
             "only for verification that environmental constraints prevent you from running, "
             "and state that verification in blockers. Set work_complete to true only when all "
             "implementation is complete."
@@ -194,16 +196,13 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         "is shown. Put complete tables and details in report. "
         "Do not shrink the requested scope or return decision_needed because output is large. "
         "If you cannot finish, return coverage with done, total, and the remaining items listed. "
-        "Use null for report, counts, or coverage when not needed; counts is an array of name and integer count objects."
+        "Use null for report, counts, or coverage when not needed; "
+        "counts is an array of name and integer count objects."
     )
     lines.append("Include every listed key; do not include report_path (delegate sets it).")
     lines.append(
         "Do not include metadata keys (such as toolAction, toolSummary, reasoning) "
         "in the JSON object."
-    )
-    lines.append(
-        "Do not preface the response with conversational text or status updates; "
-        "reply with the JSON object directly."
     )
     lines.append("Cite exact paths. Do not paste raw logs.")
     return "\n".join(lines) + "\n"
@@ -283,9 +282,7 @@ def _denied_reads(
     project_root: Path, values: list[str], denied_read_paths: tuple[str, ...]
 ) -> list[dict[str, str]]:
     root = project_root.resolve(strict=False)
-    resolved_denied = [
-        (denied, Path(denied).resolve(strict=False)) for denied in denied_read_paths
-    ]
+    resolved_denied = [(denied, Path(denied).resolve(strict=False)) for denied in denied_read_paths]
     matches = []
     for value in values:
         path = Path(value)
