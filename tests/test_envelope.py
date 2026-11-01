@@ -39,6 +39,19 @@ def test_an_unverified_result_is_accepted_as_distinct_from_completed() -> None:
     assert unverified["status"] != "completed"
 
 
+def test_writable_contract_requires_a_boolean_work_complete() -> None:
+    assert "work_complete" in envelope.json_schema(writes_allowed=True)["required"]
+    assert "work_complete" not in envelope.json_schema()["required"]
+    assert envelope.violations(valid(), writes_allowed=True) == []
+    assert envelope.violations({**valid(), "work_complete": "yes"}, writes_allowed=True) == [
+        "work_complete must be a boolean"
+    ]
+    assert (
+        envelope.sanitize({**valid(), "work_complete": False}, writes_allowed=True)["work_complete"]
+        is False
+    )
+
+
 def test_unknown_and_missing_keys_are_named_in_the_violation() -> None:
     extra = {**valid(), "raw_log": "..."}
     assert envelope.violations(extra) == ["unexpected fields: raw_log"]
@@ -129,3 +142,54 @@ def test_sanitize_defaults_blockers_and_decision_needed_on_completed() -> None:
 def test_from_text_extracts_json_without_code_fence() -> None:
     message = "I have launched the run and completed the task.\n" + json.dumps(valid())
     assert envelope.from_text(message) == valid()
+
+
+def test_worker_schema_is_strict_at_every_object() -> None:
+    def check(node: Any) -> None:
+        if isinstance(node, dict):
+            types = node.get("type")
+            if types == "object" or isinstance(types, list) and "object" in types:
+                assert node.get("additionalProperties") is False
+                assert set(node.get("required", [])) == set(node.get("properties", {}))
+            for value in node.values():
+                check(value)
+        elif isinstance(node, list):
+            for value in node:
+                check(value)
+
+    for writes_allowed in (False, True):
+        schema = envelope.json_schema(writes_allowed=writes_allowed)
+        check(schema)
+        props = schema["properties"]
+        assert "report_path" not in props
+        assert props["report"]["type"] == ["string", "null"]
+        assert props["counts"]["type"] == ["array", "null"]
+        assert props["coverage"]["type"] == ["object", "null"]
+
+
+def test_nullable_worker_fields_and_count_items_are_validated() -> None:
+    result = {**valid(), "report": None, "counts": None, "coverage": None}
+    assert envelope.violations(result) == []
+    result["counts"] = [{"name": "passed", "count": 3}]
+    assert envelope.violations(result) == []
+    for bad in (
+        {"passed": 3},
+        [{"name": "passed", "count": True}],
+        [{"name": "passed", "count": 3, "extra": 1}],
+    ):
+        assert envelope.violations({**result, "counts": bad})
+    assert "report_path" not in envelope.sanitize({**result, "report_path": "forged"})
+
+
+def test_legacy_write_result_has_unknown_completion_and_blocker() -> None:
+    result = envelope.sanitize(valid(), writes_allowed=True)
+    assert result["work_complete"] is None
+    assert result["status"] == "unverified"
+    assert "unknown" in result["blockers"][-1]
+    assert envelope.violations(result, writes_allowed=True) == []
+
+
+def test_unknown_completion_cannot_be_reported_completed() -> None:
+    result = envelope.sanitize({**valid(), "work_complete": None}, writes_allowed=True)
+    assert result["status"] == "unverified"
+    assert envelope.sanitize(result, writes_allowed=True) == result

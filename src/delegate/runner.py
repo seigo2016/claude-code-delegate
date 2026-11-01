@@ -12,11 +12,12 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from delegate import diagnose, envelope, events, liveness, store, workspace
 from delegate.adapters import registry
 from delegate.adapters.base import WorkerAdapter
+from delegate.adapters.codex import CodexAdapter, cache_root
 
 #: A worker that never wrote a byte never did anything observable, so waiting
 #: out its whole deadline only delays the inevitable timeout. It is stopped
@@ -71,7 +72,9 @@ def _snapshot(view: diagnose.RunView) -> dict[str, Any]:
     return snapshot
 
 
-def _keep_last_message(task_dir: Path, view: diagnose.RunView) -> dict[str, Any]:
+def _keep_last_message(
+    task_dir: Path, view: diagnose.RunView, *, writes_allowed: bool = False
+) -> dict[str, Any]:
     if view.last_agent_message is None:
         return {"recovery_status": "none"}
     message_path = task_dir / "last-agent-message.txt"
@@ -80,10 +83,21 @@ def _keep_last_message(task_dir: Path, view: diagnose.RunView) -> dict[str, Any]
         "recovery_status": "raw",
         "last_agent_message_path": str(message_path),
     }
-    if diagnose.has_usable_result(view):
+    parsed = envelope.from_text(view.last_agent_message)
+    if (
+        parsed is not None
+        and not envelope.violations(
+            envelope.sanitize(parsed, writes_allowed=writes_allowed), writes_allowed=writes_allowed
+        )
+        and not envelope.incomplete_write_work(parsed, writes_allowed=writes_allowed)
+    ):
         recovered = task_dir / "recovered-result.json"
         raw_result = envelope.from_text(view.last_agent_message)
-        sanitized = envelope.sanitize(raw_result) if raw_result is not None else {}
+        sanitized = (
+            envelope.sanitize(raw_result, writes_allowed=writes_allowed)
+            if raw_result is not None
+            else {}
+        )
         store.write_json(recovered, sanitized)
         fields["recovery_status"] = "usable"
         fields["recovered_result_path"] = str(recovered)
@@ -129,15 +143,29 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             events.emit(task_dir, "cancelled", terminal_reason="cancelled_before_start")
             return
 
-        state = events.emit(task_dir, "running", started_at=events.now_iso())
+        roots_before = workspace.root_entries(state.get("allowed_write_roots", ()))
+        temp_dir = None
+        if state["writes_allowed"] or state["runs_commands"]:
+            temp_root = Path(state["temp_root"]) if state.get("temp_root") else cache_root() / "tmp"
+            temp_dir = temp_root / state["task_id"]
+            temp_dir.mkdir(parents=True, exist_ok=True)
+        state = events.emit(
+            task_dir,
+            "running",
+            started_at=events.now_iso(),
+            root_entries_before=roots_before,
+            temp_dir=str(temp_dir) if temp_dir is not None else None,
+        )
         project_root = Path(state["project_root"])
         before = workspace.changed_paths(project_root)
 
         # Written per task, so it is right however this package was installed.
         schema_path = task_dir / "result.schema.json"
-        store.write_json(schema_path, envelope.json_schema())
+        store.write_json(
+            schema_path, envelope.json_schema(writes_allowed=bool(state["writes_allowed"]))
+        )
 
-        command = adapter.build_command(
+        command_args: dict[str, Any] = dict(
             project_root=Path(state["project_root"]),
             prompt_path=Path(state["prompt_path"]),
             result_path=Path(state["result_path"]),
@@ -150,6 +178,21 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             allowed_write_roots=tuple(state.get("allowed_write_roots", ())),
             timeout_sec=int(state.get("timeout_sec", 1800)),
         )
+        if state["adapter"] == "codex" and "isolate_home" in state:
+            command_args["isolate_home"] = state["isolate_home"]
+        if state["adapter"] == "codex" and temp_dir is not None:
+            command_args["temp_dir"] = temp_dir
+
+        command = adapter.build_command(**command_args)
+        worker_env = os.environ.copy()
+        if temp_dir:
+            worker_env["TMPDIR"] = str(temp_dir)
+        if state["runs_commands"] and temp_dir:
+            worker_env["PYTHONPYCACHEPREFIX"] = str(temp_dir / "pycache")
+            worker_env["RUFF_CACHE_DIR"] = str(temp_dir / "ruff-cache")
+            worker_env["PYTEST_ADDOPTS"] = (
+                worker_env.get("PYTEST_ADDOPTS", "") + " -p no:cacheprovider"
+            ).strip()
 
         cancelled = False
         process: subprocess.Popen[bytes] | None = None
@@ -169,66 +212,155 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
         started = time.monotonic()
         timed_out = False
 
-        with (
-            Path(state["prompt_path"]).open("rb") as prompt,
-            events_path.open("wb") as event_sink,
-            stderr_path.open("wb") as error_sink,
-        ):
-            try:
-                process = subprocess.Popen(
-                    command,
-                    stdin=prompt,
-                    stdout=event_sink,
-                    stderr=error_sink,
-                    start_new_session=True,
-                )
-            except OSError as error:
-                events.emit(
-                    task_dir,
-                    "failed",
-                    terminal_reason="launch_error",
-                    launch_error=f"{type(error).__name__}: {error}",
-                    duration_sec=round(time.monotonic() - started, 3),
-                )
-                return
-            event_tail = _Tail(events_path)
-            stderr_tail = _Tail(stderr_path)
-            heartbeat = max(float(os.environ.get("DELEGATE_HEARTBEAT_SEC", "5")), 0.01)
-            deadline = started + float(state["timeout_sec"])
-            silence_limit = min(SILENCE_LIMIT_SEC, float(state["timeout_sec"]) / 2)
-            next_beat = time.monotonic()
+        prompt_path = Path(state["prompt_path"])
+        resume_count = 0
+        resume_results: list[dict[str, Any]] = []
+        previous_blockers: list[str] | None = None
+        original_session_id: str | None = None
+        # Each attempt appends to the task's streams; the deadline covers the whole task.
+        while True:
+            attempt_started = time.monotonic()
+            with (
+                prompt_path.open("rb") as prompt,
+                events_path.open("ab") as event_sink,
+                stderr_path.open("ab") as error_sink,
+            ):
+                event_tail = _Tail(events_path)
+                event_tail.offset = events_path.stat().st_size
+                stderr_tail = _Tail(stderr_path)
+                stderr_tail.offset = stderr_path.stat().st_size
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        stdin=prompt,
+                        stdout=event_sink,
+                        stderr=error_sink,
+                        start_new_session=True,
+                        env=worker_env,
+                    )
+                except OSError as error:
+                    if resume_count:
+                        resume_results[-1].update(outcome="launch_error")
+                        events.update(task_dir, resume_results=resume_results)
+                    events.emit(
+                        task_dir,
+                        "failed",
+                        terminal_reason="launch_error",
+                        launch_error=f"{type(error).__name__}: {error}",
+                        duration_sec=round(time.monotonic() - started, 3),
+                    )
+                    return
+                event_tail_start, stderr_tail_start = event_tail.offset, stderr_tail.offset
+                heartbeat = max(float(os.environ.get("DELEGATE_HEARTBEAT_SEC", "5")), 0.01)
+                deadline = started + float(state["timeout_sec"])
+                silence_limit = min(SILENCE_LIMIT_SEC, float(state["timeout_sec"]) / 2)
+                next_beat = time.monotonic()
 
-            while process.poll() is None:
-                now = time.monotonic()
-                if cancelled or _cancellation_recorded(task_dir):
-                    cancelled = True
-                    _terminate(process)
-                    break
-                if now >= deadline:
-                    timed_out = True
-                    _terminate(process)
-                    break
-                if now - started >= silence_limit and not _worker_has_spoken(
-                    events_path, stderr_path
-                ):
-                    _terminate(process)
-                    timed_out = True
-                    break
-                if now >= next_beat:
-                    view = _absorb(view, adapter, event_tail, stderr_tail)
-                    events.update(task_dir, **_snapshot(view))
-                    next_beat = now + heartbeat
-                time.sleep(min(0.05, heartbeat))
-            exit_code = process.wait()
+                while process.poll() is None:
+                    now = time.monotonic()
+                    if cancelled or _cancellation_recorded(task_dir):
+                        cancelled = True
+                        _terminate(process)
+                        break
+                    if now >= deadline:
+                        timed_out = True
+                        _terminate(process)
+                        break
+                    if (
+                        now - attempt_started >= silence_limit
+                        and events_path.stat().st_size == event_tail_start
+                        and stderr_path.stat().st_size == stderr_tail_start
+                    ):
+                        _terminate(process)
+                        timed_out = True
+                        break
+                    if now >= next_beat:
+                        view = _absorb(view, adapter, event_tail, stderr_tail)
+                        events.update(task_dir, **_snapshot(view))
+                        next_beat = now + heartbeat
+                    time.sleep(min(0.05, heartbeat))
+                exit_code = process.wait()
 
-        view = _absorb(view, adapter, event_tail, stderr_tail)
-        fields: dict[str, Any] = {
-            "exit_code": exit_code,
-            "duration_sec": round(time.monotonic() - started, 3),
-            **_snapshot(view),
-        }
-        fields.update(_write_scope(project_root, before, task_dir, view))
-        _finish(task_dir, state, view, fields, cancelled=cancelled, timed_out=timed_out)
+            view = _absorb(view, adapter, event_tail, stderr_tail)
+            fields: dict[str, Any] = {
+                "exit_code": exit_code,
+                "duration_sec": round(time.monotonic() - started, 3),
+                **_snapshot(view),
+            }
+            fields.update(_write_scope(project_root, before, task_dir, view))
+            result, _ = _result_of(state, view)
+            sanitized = (
+                envelope.sanitize(result, writes_allowed=True) if result is not None else None
+            )
+            valid = sanitized is not None and not envelope.violations(
+                sanitized, writes_allowed=True
+            )
+            incomplete = bool(
+                valid and envelope.incomplete_write_work(sanitized, writes_allowed=True)
+            )
+            if resume_count:
+                resume_results[-1].update(
+                    outcome=(
+                        "cancelled"
+                        if cancelled or _cancellation_recorded(task_dir)
+                        else "timeout"
+                        if timed_out
+                        else "nonzero_exit"
+                        if exit_code
+                        else "write_scope_violation"
+                        if fields["unauthorized_writes"]
+                        else "incomplete_work"
+                        if incomplete
+                        else str(sanitized["status"])
+                        if valid
+                        else "invalid_or_empty_result"
+                    ),
+                    result=sanitized,
+                    exit_code=exit_code,
+                )
+                events.update(task_dir, resume_results=resume_results)
+            blockers = sorted(sanitized["blockers"]) if incomplete else None
+            repeated = previous_blockers is not None and blockers == previous_blockers
+            if (
+                incomplete
+                and state["writes_allowed"]
+                and state["adapter"] == "codex"
+                and view.session_id
+                and not repeated
+                and resume_count < int(state.get("resume_limit", 2))
+                and not cancelled
+                and not _cancellation_recorded(task_dir)
+                and not timed_out
+                and exit_code == 0
+                and not fields["unauthorized_writes"]
+                and time.monotonic() < deadline
+            ):
+                original_session_id = original_session_id or view.session_id
+                previous_blockers = blockers
+                resume_count += 1
+                resume_results.append(
+                    {"attempt": resume_count, "outcome": "running", "result": None}
+                )
+                events.update(task_dir, resume_count=resume_count, resume_results=resume_results)
+                command = cast(CodexAdapter, adapter).build_resume_command(
+                    session_id=original_session_id, **command_args
+                )
+                prompt_path = task_dir / "resume-prompt.md"
+                prompt_path.write_text(
+                    "Continue implementing the unfinished work listed in the blockers of your "
+                    "previous answer until all implementation is complete. Return only when all "
+                    "is complete or a decision is needed. Create temporary files and directories "
+                    "only under $TMPDIR; do not create new entries directly under "
+                    "allowed_write_roots except packet-named outputs.\n",
+                    encoding="utf-8",
+                )
+                Path(state["result_path"]).unlink(missing_ok=True)
+                view = diagnose.RunView(
+                    session_id=original_session_id, changed_paths=view.changed_paths
+                )
+                continue
+            _finish(task_dir, state, view, fields, cancelled=cancelled, timed_out=timed_out)
+            return
 
 
 def _write_scope(
@@ -276,17 +408,24 @@ def _absorb(
     return view
 
 
-def _salvaged_result(view: diagnose.RunView) -> dict[str, Any] | None:
+def _salvaged_result(
+    view: diagnose.RunView, *, writes_allowed: bool = False
+) -> dict[str, Any] | None:
     """A result worth delivering despite the timeout, if the worker left one.
 
     The worker finished its turn but never handed the result back through the
     file it was given. Promoting the message is only honest when it already
     satisfies the contract; anything else stays a timeout.
     """
-    if not diagnose.has_usable_result(view):
-        return None
     parsed = envelope.from_text(view.last_agent_message or "")
-    return envelope.sanitize(parsed) if parsed is not None else None
+    if parsed is None:
+        return None
+    result = envelope.sanitize(parsed, writes_allowed=writes_allowed)
+    if envelope.violations(result, writes_allowed=writes_allowed):
+        return None
+    if envelope.incomplete_write_work(result, writes_allowed=writes_allowed):
+        return None
+    return result
 
 
 def _result_of(state: dict[str, Any], view: diagnose.RunView) -> tuple[dict[str, Any] | None, str]:
@@ -303,6 +442,16 @@ def _result_of(state: dict[str, Any], view: diagnose.RunView) -> tuple[dict[str,
     return None, "none"
 
 
+def _save_result(task_dir: Path, result_path: Path, result: dict[str, Any]) -> None:
+    result = dict(result)
+    report = result.pop("report", None)
+    if isinstance(report, str) and report:
+        report_path = task_dir / "report.md"
+        report_path.write_text(report, encoding="utf-8")
+        result["report_path"] = str(report_path)
+    store.write_json(result_path, result)
+
+
 def _finish(
     task_dir: Path,
     state: dict[str, Any],
@@ -313,19 +462,20 @@ def _finish(
     timed_out: bool,
 ) -> None:
     current = store.read_json(task_dir / "state.json")
+    writes_allowed = bool(state["writes_allowed"])
     if cancelled or current.get("status") == "cancellation_requested":
         events.emit(task_dir, "cancelled", terminal_reason="cancelled", **fields)
         return
     if timed_out:
-        salvaged = _salvaged_result(view)
+        salvaged = _salvaged_result(view, writes_allowed=writes_allowed)
         if salvaged is not None:
-            store.write_json(Path(state["result_path"]), salvaged)
+            _save_result(task_dir, Path(state["result_path"]), salvaged)
             events.emit(
                 task_dir,
                 "degraded",
                 terminal_reason="timeout_with_result",
                 failure_class=diagnose.classify_timeout(view),
-                **_keep_last_message(task_dir, view),
+                **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
                 **fields,
             )
             return
@@ -334,7 +484,7 @@ def _finish(
             "timeout",
             terminal_reason="timeout",
             failure_class=diagnose.classify_timeout(view),
-            **_keep_last_message(task_dir, view),
+            **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
             **fields,
         )
         return
@@ -349,7 +499,7 @@ def _finish(
             "failed",
             terminal_reason="nonzero_exit",
             **failure_field,
-            **_keep_last_message(task_dir, view),
+            **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
             **fields,
         )
         return
@@ -371,22 +521,32 @@ def _finish(
             "failed",
             terminal_reason="empty_result",
             **failure_field,
-            **_keep_last_message(task_dir, view),
+            **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
             **fields,
         )
         return
-    result = envelope.sanitize(result)
+    result = envelope.sanitize(result, writes_allowed=writes_allowed)
     # So that a reader of the task finds the sanitized result in one place either way.
-    store.write_json(Path(state["result_path"]), result)
-    problems = envelope.violations(result)
+    problems = envelope.violations(result, writes_allowed=writes_allowed)
     if problems:
+        store.write_json(Path(state["result_path"]), result)
         events.emit(
             task_dir,
             "failed",
             terminal_reason="invalid_result",
             result_problems=problems,
             **failure_field,
-            **_keep_last_message(task_dir, view),
+            **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
+            **fields,
+        )
+        return
+    _save_result(task_dir, Path(state["result_path"]), result)
+    if envelope.incomplete_write_work(result, writes_allowed=writes_allowed):
+        events.emit(
+            task_dir,
+            "failed",
+            terminal_reason="incomplete_work",
+            failure_class="incomplete_work",
             **fields,
         )
         return

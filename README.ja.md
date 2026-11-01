@@ -60,6 +60,8 @@ plugin を install しても、main agent は差し替わらず、tool も外れ
 
 ## 設定
 
+`.claude/delegate.toml` の最上位に `temp_root = "/absolute/path"` を指定すると task の一時 directory をその配下に置きます。省略時は delegate cache 配下の `tmp` を使います。
+
 role が指定するのは level であり、model 名ではありません。その level が何を意味するかは worker 側が定義します。role には `preferred_worker` も指定できます。worker は `--worker`、role の `preferred_worker`、`default_worker` の順で選びます。選んだ worker がその level を定義していなければ、起動する前に拒否します。
 
 role に `allowed_escalation_reasons` を指定すると、packet はその一覧に含まれる `escalation_reason` を持つ必要があります。`requires_explicit_user_direction = true` を指定した role では、packet に `"user_directed": true` も必要です。どちらも監査のため task と一緒に記録します。`user_directed` は呼び出し側の申告であり、人が指示したことを証明する値ではありません。
@@ -114,7 +116,7 @@ timeout には停止位置の読みが付きます。`tool_stall` / `finalizatio
 
 正しい結果に見えるだけのメッセージを、正常な結果として扱うことはありません。task directory に保存します。
 
-結果は 1 つの list につき、300 文字以内の文字列を 5 件までです。それより長い結果が必要な場合、書き込み可能な worker はファイルの path を返し、read-only worker は重要度上位 5 件と追加 task の要否を返します。
+Chair に返す evidence の list は、それぞれ 300 文字以内の文字列を 5 件までに制限します。worker は表や詳細を `report` にすべて含められます。delegate はその内容を task log の `report.md` に保存し、`report_path` を返します。`report`、`counts`、`coverage` は worker の必須項目で、不要な場合は null を指定します。`counts` は `{ "name": 文字列, "count": 整数 }` の配列で、Chair にも配列のまま返します。空でない `report` のみ `report.md` に保存し、`report_path` は delegate が設定します。未完了項目は最大 10 件表示します。出力が長いことだけを理由に作業範囲を縮めたり判断を求めたりしません。
 
 patcher には \`requires_allowed_writes = true\`、auditor には \`forbids_allowed_writes = true\` を指定できます。絶対 path、親 directory、URL を起動前に拒否する repo-local role には \`repo_local_reads = true\` を指定します。
 
@@ -143,6 +145,8 @@ skill と hook が実行します。人が直接使うのは診断のときだ�
 
 `submit` は `--worker <name>` で backend を task ごとに上書きできます。全コマンドが `--project-root` を受け取ります。submit handle と完了通知にも正規化済みの root が含まれるため、cross-repository task は submit 時と同じ ledger から回収されます。1 回の Bash 呼び出しで複数の独立 task を submit しても、hook は返された全 handle を追跡します。1 件を collect した後は、同じ呼び出しの未回収 task に対して再び待機します。
 
+Claude Code が `CLAUDE_CODE_SESSION_ID` を提供する場合、submit はその ID を記録し、hook は同じ session の task だけを報告します。ID がない以前の task や submit は従来どおり共有されます。手動の `watch`、`reconcile`、`collect` は project 全体を対象とする診断用コマンドです。
+
 ## 検出の範囲
 
 検出できる:
@@ -169,7 +173,7 @@ sandbox が事前に止められる範囲は backend で異なります。書き
 
 カーネルで拒否するのは codex だけです。書き込みを試みると `Read-only file system` が返ります。claude では編集ツールをそもそも渡さず、試した迂回 (シェルのリダイレクト、`tee`、Python の 1 行スクリプト) はいずれも分類器が拒みました。ただしこれは境界ではなく、その都度の判断です。opencode の読み取り専用 task には、実行ごとに `edit`、`bash`、`task`、`webfetch`、`websearch` を deny した primary agent を与えます。これは OS sandbox ではなく tool permission の境界ですが、task contract でも `.claude`、`/tmp`、その他への scratch file 作成を禁止します。
 
-テストやビルドを走らせる role には、リポジトリを変更できない場合でも書き込み可能なファイルシステムを与えます。ビルドツールが home ディレクトリ配下にキャッシュを書くためです。この場合リポジトリへの書き込みを事前に止めるものはなく、上記の事後検査が検出します。
+テストやビルドを走らせる role には、リポジトリを変更できない場合でも書き込み可能なファイルシステムを与えます。ビルドツールがキャッシュを書くためです。Python と Ruff のキャッシュは task の一時 directory に置き、pytest の cache provider は無効にします。この場合リポジトリへの書き込みを事前に止めるものはなく、上記の事後検査が検出します。
 
 adapter は 3 つの CLI の出力形式に依存します。形式は実行を観測して確認したものなので、backend の更新で変わる可能性があります。
 

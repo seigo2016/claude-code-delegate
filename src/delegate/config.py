@@ -50,6 +50,8 @@ class Worker:
     adapter: str
     enabled: bool
     levels: dict[str, Level]
+    isolate_home: bool = True
+    resume_limit: int = 2
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,8 @@ class Plan:
     effort: str
     timeout: int
     denied_read_paths: tuple[str, ...] = ()
+    isolate_home: bool = True
+    resume_limit: int = 2
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,7 @@ class Settings:
     workers: dict[str, Worker]
     default_worker: str | None
     denied_read_paths: tuple[str, ...] = ()
+    temp_root: str | None = None
 
     def plan(self, role_name: str, *, worker: str | None = None) -> Plan:
         role = self.roles.get(role_name)
@@ -93,6 +98,8 @@ class Settings:
             effort=level.effort,
             timeout=role.timeout,
             denied_read_paths=self.denied_read_paths,
+            isolate_home=chosen.isolate_home,
+            resume_limit=chosen.resume_limit,
         )
 
     def _choose_worker(self, requested: str | None, preferred: str | None) -> Worker:
@@ -182,10 +189,17 @@ def _string_values(body: dict[str, Any], key: str, where: str) -> tuple[str, ...
     return tuple(values)
 
 
-def _optional_bool(body: dict[str, Any], key: str, where: str) -> bool:
-    value = body.get(key, False)
+def _optional_bool(body: dict[str, Any], key: str, where: str, *, default: bool = False) -> bool:
+    value = body.get(key, default)
     if not isinstance(value, bool):
         raise ConfigError(f"{where}.{key} must be a boolean")
+    return value
+
+
+def _resume_limit(body: dict[str, Any], where: str) -> int:
+    value = body.get("resume_limit", 2)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigError(f"{where}.resume_limit must be a non-negative integer")
     return value
 
 
@@ -234,13 +248,21 @@ def load(path: Path) -> Settings:
                 for level, entry in body.items()
                 if isinstance(entry, dict)
             },
+            isolate_home=_optional_bool(body, "isolate_home", f"workers.{name}", default=True),
+            resume_limit=_resume_limit(body, f"workers.{name}"),
         )
         for name, body in raw.get("workers", {}).items()
     }
     default_worker = raw.get("default_worker")
+    temp_root = raw.get("temp_root")
+    if temp_root is not None and (
+        not isinstance(temp_root, str) or not Path(temp_root).is_absolute()
+    ):
+        raise ConfigError("temp_root must be an absolute path")
     return Settings(
         roles=roles,
         workers=workers,
         default_worker=str(default_worker) if default_worker is not None else None,
         denied_read_paths=_denied_read_paths(raw),
+        temp_root=temp_root,
     )

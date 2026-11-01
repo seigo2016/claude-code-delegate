@@ -76,6 +76,12 @@ def test_top_level_denied_read_paths_are_loaded(tmp_path: Path) -> None:
     assert settings.denied_read_paths == ("/srv/private",)
 
 
+@pytest.mark.parametrize("value", ['"relative/path"', "42", '""'])
+def test_temp_root_requires_absolute_path(tmp_path: Path, value: str) -> None:
+    with pytest.raises(config.ConfigError, match="temp_root must be an absolute path"):
+        load(tmp_path, f"temp_root = {value}\n" + SETTINGS)
+
+
 def test_the_same_role_resolves_differently_on_another_worker(tmp_path: Path) -> None:
     plan = load(tmp_path).plan("artifact-auditor", worker="opencode")
 
@@ -212,3 +218,33 @@ def test_a_level_without_a_model_or_an_effort_is_reported(tmp_path: Path) -> Non
 
     with pytest.raises(config.ConfigError, match="workers.codex.standard is missing effort"):
         load(tmp_path, text)
+
+
+def test_worker_isolate_home_defaults_to_true_and_can_be_disabled(tmp_path: Path) -> None:
+    text = SETTINGS.replace(
+        'adapter = "codex"\nenabled = true',
+        'adapter = "codex"\nenabled = true\nisolate_home = false',
+    )
+    settings = load(tmp_path, text)
+    assert settings.workers["codex"].isolate_home is False
+    assert settings.plan("artifact-auditor").isolate_home is False
+
+    default_settings = load(tmp_path)
+    assert default_settings.workers["codex"].isolate_home is True
+    assert default_settings.plan("artifact-auditor").isolate_home is True
+
+
+def test_worker_isolate_home_must_be_boolean(tmp_path: Path) -> None:
+    text = SETTINGS.replace(
+        'adapter = "codex"\nenabled = true',
+        'adapter = "codex"\nenabled = true\nisolate_home = "yes"',
+    )
+    with pytest.raises(config.ConfigError, match="workers.codex.isolate_home must be a boolean"):
+        load(tmp_path, text)
+
+
+@pytest.mark.parametrize("value", ["-1", "true", '"2"'])
+def test_resume_limit_rejects_invalid_values(tmp_path: Path, value: str) -> None:
+    invalid = SETTINGS.replace('adapter = "codex"', f'adapter = "codex"\nresume_limit = {value}')
+    with pytest.raises(config.ConfigError, match="resume_limit must be a non-negative integer"):
+        load(tmp_path, invalid)

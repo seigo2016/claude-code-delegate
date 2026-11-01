@@ -30,6 +30,10 @@ _SHAPE = {
     "artifact_paths": ["paths a reader should open"],
     "blockers": ["what stopped you, if anything"],
     "decision_needed": "the question only the caller can answer, or null",
+    "report": "full report text or null",
+    "counts": [{"name": "count name", "count": 0}],
+    "coverage": {"done": 0, "total": 0, "remaining": ["unfinished item"]},
+    "work_complete": "boolean: whether all objective implementation is complete",
 }
 FORBIDDEN = (
     "destructive writes",
@@ -63,8 +67,10 @@ def _completion_watch_registry_root() -> Path:
 
 def _completion_watch_path(project_root: Path, task_id: str) -> Path:
     identity = f"{project_root}\0{task_id}".encode()
-    return _completion_watch_registry_root() / "pending-submissions" / (
-        hashlib.sha256(identity).hexdigest() + ".json"
+    return (
+        _completion_watch_registry_root()
+        / "pending-submissions"
+        / (hashlib.sha256(identity).hexdigest() + ".json")
     )
 
 
@@ -76,7 +82,7 @@ def register_completion_watch(project_root: Path, task_id: str) -> None:
     )
 
 
-def pending_completion_watches() -> list[dict[str, str]]:
+def pending_completion_watches(session_id: str | None = None) -> list[dict[str, str]]:
     root = _completion_watch_registry_root() / "pending-submissions"
     found: list[dict[str, str]] = []
     for path in sorted(root.glob("*.json")):
@@ -85,6 +91,15 @@ def pending_completion_watches() -> list[dict[str, str]]:
         except (OSError, ValueError, json.JSONDecodeError):
             continue
         if isinstance(value.get("project_root"), str) and isinstance(value.get("task_id"), str):
+            try:
+                state = store.read_json(
+                    task_root(Path(value["project_root"])) / value["task_id"] / "state.json"
+                )
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            owner = state.get("submitter_session_id")
+            if session_id and owner and owner != session_id:
+                continue
             found.append({"project_root": value["project_root"], "task_id": value["task_id"]})
     return found
 
@@ -122,30 +137,29 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     if plan.denied_read_paths:
         lines.append("Do not read these paths:")
         lines.extend(f"- {path}" for path in plan.denied_read_paths)
-    lines.append("You may write only:")
-    lines.extend(f"- {item}" for item in value["allowed_writes"] or ["nothing"])
+    lines.append("Write permissions:")
+    if value["allowed_writes"]:
+        lines.append(
+            "Inside the repository, write only to these canonical repository-relative paths:"
+        )
+        lines.extend(f"- {item}" for item in value["allowed_writes"])
+        lines.append("Do not write a similarly named file elsewhere.")
+    else:
+        lines.append("Do not write inside the repository.")
     if plan.role.allowed_write_roots:
         lines.append("External write roots allowed by this role:")
         lines.extend(f"- {root}" for root in plan.role.allowed_write_roots)
-        if value["allowed_writes"]:
-            lines.append(
-                "Inside the repository, write only to the allowed_writes paths above. "
-                "Outside the repository, write only below the external roots above."
-            )
-        else:
-            lines.append(
-                "Do not write inside the repository. External writes are allowed only below "
-                "the roots above."
-            )
-    if value["allowed_writes"]:
         lines.append(
-            "Write only to the canonical repository-relative paths listed above. "
-            "Do not write a similarly named file elsewhere."
+            "Outside the repository, write only below these roots"
+            + (" or $TMPDIR." if value["allowed_writes"] or plan.role.runs_commands else ".")
         )
+    if value["allowed_writes"] or plan.role.runs_commands:
+        lines.append("Create temporary files and directories only under $TMPDIR.")
     elif not plan.role.allowed_write_roots:
         lines.append(
             "This is a read-only task. Do not invoke write, edit, or patch tools; "
-            "do not create files in .claude, /tmp, or elsewhere."
+            "do not create files in .claude, /tmp, or elsewhere. "
+            "Deliver tables and catalogs in the report field, not as files."
         )
     lines.append("Do not:")
     lines.extend(f"- {item}" for item in forbidden)
@@ -154,48 +168,47 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         lines.append(plan.role.instructions.strip())
     lines.append("Bring back evidence for:")
     lines.extend(f"- {item}" for item in value["required_evidence"])
-    lines.append(
-        "If you cannot run required verification or cannot supply its evidence, return unverified "
-        "instead of completed and state what could not be verified in blockers."
-    )
+    if value["allowed_writes"]:
+        lines.append(
+            "Do not return until you have completed all implementation of the objective. "
+            "If blocked, report the incomplete work and the blocker. "
+            "After implementation is complete, return unverified "
+            "only for verification that environmental constraints prevent you from running, "
+            "and state that verification in blockers. Set work_complete to true only when all "
+            "implementation is complete."
+        )
+    else:
+        lines.append(
+            "If you cannot run required verification or cannot supply its evidence, return "
+            "unverified instead of completed and state what could not be verified in blockers."
+        )
     lines.append("")
     # Only one backend can be handed a schema, so the shape is stated here for
     # all of them. Without it a worker invents its own and the run is wasted.
     lines.append("Reply with this JSON object and nothing else. No prose, no code fence:")
-    lines.append(json.dumps({field: _SHAPE[field] for field in envelope.FIELDS}, indent=2))
+    fields = (*envelope.FIELDS, *envelope.OPTIONAL_FIELDS)
+    if value["allowed_writes"]:
+        fields = (*fields, "work_complete")
+    lines.append(json.dumps({field: _SHAPE[field] for field in fields}, indent=2))
     lines.append("")
-    overflow = (
-        "write it to a file you were allowed to write and return its path"
-        if value["allowed_writes"]
-        else "return the five highest-priority findings and set status to decision_needed "
-        "when another bounded task is required"
-    )
     lines.append(
-        f"Each list holds at most {envelope.MAX_ITEMS} strings of "
-        f"{envelope.MAX_ITEM_CHARS} characters or fewer. If the answer needs more than "
-        f"that, {overflow}."
+        "The short list limits of five items and 300 characters apply only to what the Chair "
+        "is shown. Put complete tables and details in report. "
+        "Do not shrink the requested scope or return decision_needed because output is large. "
+        "If you cannot finish, return coverage with done, total, and the remaining items listed. "
+        "Use null for report, counts, or coverage when not needed; "
+        "counts is an array of name and integer count objects."
     )
-    lines.append(
-        "This is a hard validity constraint: one overlong string fails the whole task. "
-        "Keep each string within 240 characters so counting differences cannot cross the limit."
-    )
-    lines.append(
-        "Before replying, check that the object has exactly these six keys and every list has "
-        "at most five items. Consolidate related facts instead of adding a sixth item."
-    )
+    lines.append("Include every listed key; do not include report_path (delegate sets it).")
     lines.append(
         "Do not include metadata keys (such as toolAction, toolSummary, reasoning) "
         "in the JSON object."
-    )
-    lines.append(
-        "Do not preface the response with conversational text or status updates; "
-        "reply with the JSON object directly."
     )
     lines.append("Cite exact paths. Do not paste raw logs.")
     return "\n".join(lines) + "\n"
 
 
-def _find_duplicate(root: Path, key: str) -> dict[str, Any] | None:
+def _find_duplicate(root: Path, key: str, session_id: str | None = None) -> dict[str, Any] | None:
     """The identical task that is still running, if there is one.
 
     Only a task still in flight counts. Matching finished ones too would answer a
@@ -209,7 +222,11 @@ def _find_duplicate(root: Path, key: str) -> dict[str, Any] | None:
             state = store.read_json(path)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        if state.get("fingerprint") == key and state.get("status") in events.ACTIVE_STATES:
+        if (
+            state.get("fingerprint") == key
+            and state.get("status") in events.ACTIVE_STATES
+            and state.get("submitter_session_id") == session_id
+        ):
             return state
     return None
 
@@ -265,9 +282,7 @@ def _denied_reads(
     project_root: Path, values: list[str], denied_read_paths: tuple[str, ...]
 ) -> list[dict[str, str]]:
     root = project_root.resolve(strict=False)
-    resolved_denied = [
-        (denied, Path(denied).resolve(strict=False)) for denied in denied_read_paths
-    ]
+    resolved_denied = [(denied, Path(denied).resolve(strict=False)) for denied in denied_read_paths]
     matches = []
     for value in values:
         path = Path(value)
@@ -360,7 +375,8 @@ def submit(
     root = task_root(project_root)
     root.mkdir(parents=True, exist_ok=True)
     key = fingerprint(project_root, role, title, value)
-    duplicate = _find_duplicate(root, key)
+    submitter_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID") or None
+    duplicate = _find_duplicate(root, key, submitter_session_id)
     if duplicate is not None:
         return handle_of(duplicate, deduplicated=True)
 
@@ -387,11 +403,17 @@ def submit(
         # answer what its worker was allowed to do.
         "writes_allowed": bool(value["allowed_writes"]),
         "runs_commands": plan.role.runs_commands,
+        "temp_root": settings.temp_root,
         "allowed_read_roots": list(plan.role.allowed_read_roots),
         "allowed_write_roots": list(plan.role.allowed_write_roots),
         "timeout_sec": plan.timeout,
+        "resume_limit": plan.resume_limit,
+        "isolate_home": plan.isolate_home,
+        "resume_count": 0,
+        "resume_results": [],
         "pid": None,
         "session_id": None,
+        "submitter_session_id": submitter_session_id,
         "exit_code": None,
         "terminal_reason": None,
         "failure_class": None,

@@ -59,6 +59,10 @@ def event(payload):
 if mode == "utterly_silent":
     time.sleep(60)
 
+if mode == "temporary_hang":
+    pathlib.Path(os.environ["FAKE_TEMP_RECORD"]).write_text(os.environ["TMPDIR"])
+    time.sleep(60)
+
 event({"type": "thread.started", "thread_id": "session-1"})
 
 if mode == "tool_hang":
@@ -74,6 +78,15 @@ if mode == "wait_for_foreign_change":
     while not foreign.exists() and time.monotonic() < deadline:
         time.sleep(0.01)
 
+if mode == "temporary_and_root_entries":
+    temp = pathlib.Path(os.environ["TMPDIR"])
+    pathlib.Path(os.environ["FAKE_TEMP_RECORD"]).write_text(str(temp))
+    (temp / "scratch").mkdir()
+    root = pathlib.Path(os.environ["FAKE_ROOT"])
+    (root / "smoke-test-123").mkdir()
+    (root / "declared").mkdir()
+    (root / "declared" / "output.txt").write_text("ok")
+
 good = {
     "status": "completed",
     "observed_facts": ["the fake worker ran"],
@@ -82,6 +95,11 @@ good = {
     "blockers": [],
     "decision_needed": None,
 }
+
+if "--output-schema" in args:
+    schema_path = pathlib.Path(args[args.index("--output-schema") + 1])
+    if "work_complete" in json.loads(schema_path.read_text())["required"]:
+        good["work_complete"] = True
 
 if mode == "finalization_hang":
     event({"type": "item.completed",
@@ -142,12 +160,22 @@ if mode == "writes_elsewhere":
 if mode == "decision_needed":
     good = {**good, "status": "decision_needed", "decision_needed": "pick a threshold"}
 
-if mode == "unverified":
+if mode in ("unverified", "unverified_incomplete", "unverified_complete"):
     good = {
         **good,
         "status": "unverified",
         "blockers": ["the requested verification command was unavailable"],
     }
+    if mode == "unverified_incomplete":
+        good["work_complete"] = False
+    if mode == "unverified_complete":
+        good["work_complete"] = True
+
+if mode in ("resume_success", "resume_limit", "resume_repeated"):
+    attempt = len(pathlib.Path(os.environ["FAKE_CALLS"]).read_text().splitlines()) - 1
+    if mode != "resume_success" or attempt == 0:
+        good.update(status="unverified", work_complete=False,
+                    blockers=["same" if mode == "resume_repeated" else f"blocker-{attempt}"])
 
 event({"type": "item.completed",
        "item": {"id": "i-2", "type": "agent_message", "text": json.dumps(good)}})
@@ -272,7 +300,7 @@ def workspace(tmp_path: Path) -> Workspace:
 
     src = str(Path(__file__).resolve().parents[1] / "src")
     env = {
-        **os.environ,
+        **{key: value for key, value in os.environ.items() if key != "CLAUDE_CODE_SESSION_ID"},
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "PYTHONPATH": src,
         "FAKE_MODE": str(mode_file),

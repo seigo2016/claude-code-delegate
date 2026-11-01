@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-from delegate import config, events, liveness, runner, store, tasks
+from delegate import config, envelope, events, liveness, runner, store, tasks
 
 WATCH_POLL_SEC = 1.0
 # How long a supervisor may take to claim its lock before we believe it is gone.
@@ -96,7 +96,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     if state["status"] in {"completed", "decision_needed", "unverified"} or (
         state["status"] == "degraded" and state.get("recovery_status") == "usable"
     ):
-        result = store.read_json(Path(state["result_path"]))
+        result = envelope.chair_display(store.read_json(Path(state["result_path"])))
     state = events.emit(task_dir, state["status"], delivered_at=events.now_iso())
     delivery = {
         "task_id": state["task_id"],
@@ -110,6 +110,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "terminal_reason": state.get("terminal_reason"),
         "failure_class": state.get("failure_class"),
         "failure_message": state.get("failure_message"),
+        "runtime_warnings": state.get("root_entry_warnings", []),
         "recovery_status": state.get("recovery_status"),
         "result": result,
         "artifacts": {
@@ -190,9 +191,15 @@ def _reconcile_state(state: dict[str, Any]) -> dict[str, Any]:
     return events.emit(task_dir, "orphaned", terminal_reason="worker_gone")
 
 
-def cmd_reconcile(args: argparse.Namespace) -> int:
+def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> int:
     project_root = _root(args.project_root)
-    reconciled = [_reconcile_state(state) for state in _states(project_root)]
+    reconciled = [
+        _reconcile_state(state)
+        for state in _states(project_root)
+        if not session_id
+        or not state.get("submitter_session_id")
+        or state["submitter_session_id"] == session_id
+    ]
     ready = [
         _line(state)
         for state in reconciled
@@ -206,6 +213,14 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         }
     )
     return 0
+
+
+def cmd_hook_reconcile(args: argparse.Namespace) -> int:
+    try:
+        session_id = json.load(sys.stdin).get("session_id")
+    except (ValueError, AttributeError):
+        session_id = None
+    return cmd_reconcile(args, session_id if isinstance(session_id, str) else None)
 
 
 #: An ``asyncRewake`` hook wakes the session on exit code 2 and on no other code,
@@ -330,7 +345,9 @@ def _prune_session_watches(session_id: str) -> None:
             path.unlink(missing_ok=True)
 
 
-def _watch_tasks_from_handles(handles: list[dict[str, Any]]) -> list[tuple[Path, str]]:
+def _watch_tasks_from_handles(
+    handles: list[dict[str, Any]], session_id: str | None = None
+) -> list[tuple[Path, str]]:
     watched = []
     seen = set()
     for handle in handles:
@@ -341,6 +358,9 @@ def _watch_tasks_from_handles(handles: list[dict[str, Any]]) -> list[tuple[Path,
             or state.get("task_id") != handle["task_id"]
         ):
             raise ValueError("task handle does not match task state")
+        owner = state.get("submitter_session_id")
+        if session_id and owner and owner != session_id:
+            continue
         identity = (project_root, state["task_id"])
         if identity not in seen:
             watched.append(identity)
@@ -391,12 +411,14 @@ def cmd_hook_watch(args: argparse.Namespace) -> int:
             else hook_input["error"]
         )
         handles = _handles_if_present(output)
-        registered = tasks.pending_completion_watches()
+        registered = tasks.pending_completion_watches(session_id)
         submitted = (
-            _watch_tasks_from_handles([*handles, *registered]) if (handles or registered) else []
+            _watch_tasks_from_handles([*handles, *registered], session_id)
+            if (handles or registered)
+            else []
         )
         watched = _watch_tasks_from_handles(
-            [*_read_session_watches(session_id), *handles, *registered]
+            [*_read_session_watches(session_id), *handles, *registered], session_id
         )
     except (KeyError, TypeError, OSError, ValueError, json.JSONDecodeError):
         _print({"ready": []})
@@ -570,6 +592,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     reconcile = with_root(sub.add_parser("reconcile", help="classify tasks whose worker is gone"))
     reconcile.set_defaults(func=cmd_reconcile)
+
+    hook_reconcile = with_root(sub.add_parser("_hook-reconcile", help=argparse.SUPPRESS))
+    hook_reconcile.set_defaults(func=cmd_hook_reconcile)
 
     watch = with_root(sub.add_parser("watch", help="wait until a task is worth collecting"))
     watch.set_defaults(func=cmd_watch)

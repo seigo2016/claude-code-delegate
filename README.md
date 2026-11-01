@@ -70,6 +70,8 @@ until you declare one.
 
 ## Configuration
 
+Set top-level `temp_root = "/absolute/path"` in `.claude/delegate.toml` to place task temporary directories there; the default is the delegate cache directory under `tmp`.
+
 A role asks for a level, never a model, and each worker says what that level
 means for itself. A role may also name `preferred_worker`. Worker selection is,
 in order: `--worker`, the role's `preferred_worker`, then `default_worker`. A
@@ -88,6 +90,16 @@ prove that a person gave the instruction.
 | `codex` | `codex exec --json` | an output file, plus a JSON schema it is held to |
 | `opencode` | `opencode run --format json` | its last text part |
 | `claude` | `claude -p --output-format stream-json` | its closing result event |
+
+For `codex`, delegate redirects `CODEX_HOME` to a dedicated cache directory
+(`$XDG_CACHE_HOME/delegate/codex-home` or `~/.cache/delegate/codex-home`) with a
+symlink to `~/.codex/auth.json` and a minimal `config.toml` without `AGENTS.md`.
+This keeps interactive instructions from leaking into delegated runs. Set
+`isolate_home = false` under `[workers.codex]` to use the unisolated home instead.
+For tasks with allowed writes, an incomplete Codex result resumes the same session
+up to twice; set `resume_limit` under `[workers.codex]` to change that limit (zero
+disables resumes). Identical consecutive blocker lists stop retries. The task's
+`state.json` records `resume_count` and `resume_results` for each attempt.
 
 Roles that ship in the example: `artifact-auditor`, `repo-cartographer`,
 `bounded-implementer`, `verification-runner`, `consistency-auditor`,
@@ -138,9 +150,13 @@ A timeout carries the reading of where it stopped: `tool_stall`,
 A message that looks like a valid result is never promoted to one. It is kept
 beside the task.
 
-A result holds at most five strings of 300 characters per list. For a longer one,
-have a writable worker write a file and return its path. A read-only worker
-returns the five highest-priority findings and requests another bounded task.
+The Chair receives at most five strings of 300 characters per evidence list.
+Workers can return complete tables and details in `report`; delegate saves that
+text as `report.md` in the task log and returns `report_path`. `report`, `counts`, and `coverage` are required worker fields and may be null.
+`counts` is an array of `{ "name": string, "count": integer }` objects, preserved as a list
+for the Chair; coverage shows at most ten remaining items. Only a non-empty report
+creates `report.md`; `report_path` is set by delegate, not the worker.
+Large output alone is not a reason to reduce the task scope or request a decision.
 
 Roles may set \`requires_allowed_writes = true\` for patchers,
 \`forbids_allowed_writes = true\` for auditors, and
@@ -189,6 +205,10 @@ carry the resolved root so cross-repository tasks are collected from the same
 ledger they were submitted to. One Bash call may submit several independent
 tasks: the hook tracks every returned handle. After collecting one, it re-arms
 itself for any still-uncollected task from that same call.
+When Claude Code provides `CLAUDE_CODE_SESSION_ID`, submit records it and hooks
+only report that session's tasks. Older tasks and submissions without the ID
+retain the previous shared behavior. Manual `watch`, `reconcile`, and `collect`
+remain project-wide diagnostic commands.
 
 ## What is and is not checked
 
@@ -229,7 +249,8 @@ boundary, not an operating-system sandbox; the task contract still forbids
 scratch files in `.claude`, `/tmp`, and elsewhere.
 
 A role that runs tests or builds gets a writable filesystem even when it may not
-change the repository, because build tools write caches under the home directory.
+change the repository, because build tools write caches. Python and Ruff caches go under the task temporary
+directory, and pytest's cache provider is disabled.
 Nothing then stops such a run from touching the repository; the scope check above
 catches it afterwards.
 

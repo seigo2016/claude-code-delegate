@@ -21,9 +21,9 @@ frontier = { model = "opencode-go/glm-5.2", effort = "high" }
 [workers.codex]
 adapter = "codex"
 enabled = true
-light = { model = "gpt-5.6-luna", effort = "high" }
-standard = { model = "gpt-5.6-terra", effort = "high" }
-frontier = { model = "gpt-5.6-sol", effort = "xhigh" }
+light = { model = "gpt-6-luna", effort = "high" }
+standard = { model = "gpt-6.1-terra", effort = "high" }
+frontier = { model = "gpt-6.1-sol", effort = "high" }
 
 [roles.artifact-auditor]
 level = "standard"
@@ -43,5 +43,12 @@ runs_commands = true
 level = "light"
 
 [roles.adversarial-critic]
-level = "frontier"
+level = "standard"
 timeout = 3600
+[workers.agy]
+adapter = "agy"
+enabled = true
+light = { model = "gemini-3.8-flash", effort = "high" }
+standard = { model = "gemini-3.8-flash", effort = "high" }
+
+

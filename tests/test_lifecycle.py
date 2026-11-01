@@ -12,6 +12,8 @@ import signal
 import time
 from pathlib import Path
 
+import pytest
+
 from conftest import PACKET, Workspace
 
 
@@ -23,6 +25,79 @@ def wait_for_terminal(workspace: Workspace, task_id: str, timeout: float = 20) -
             return state
         time.sleep(0.05)
     raise AssertionError(f"task {task_id} never finished")
+
+
+@pytest.mark.parametrize("isolated", [True, False])
+def test_task_temp_and_root_warnings(workspace: Workspace, tmp_path: Path, isolated: bool) -> None:
+    workspace.env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    workspace.env["FAKE_TEMP_RECORD"] = str(tmp_path / "temp-record")
+    workspace.env["FAKE_ROOT"] = str(workspace.repo)
+    workspace.settings.write_text(
+        workspace.settings.read_text()
+        .replace(
+            'adapter = "codex"', f'adapter = "codex"\nisolate_home = {str(isolated).lower()}', 1
+        )
+        .replace(
+            '[roles.bounded-implementer]\nlevel = "standard"',
+            '[roles.bounded-implementer]\nlevel = "standard"\n'
+            f'allowed_write_roots = ["{workspace.repo}"]',
+        )
+    )
+    workspace.mode("temporary_and_root_entries")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["declared/output.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    temp = tmp_path / "cache" / "tmp" / handle["task_id"]
+    assert Path(workspace.env["FAKE_TEMP_RECORD"]).read_text() == str(temp)
+    roots_arg = next(
+        x for x in workspace.calls()[0] if x.startswith("sandbox_workspace_write.writable_roots=")
+    )
+    assert str(temp) in json.loads(roots_arg.split("=", 1)[1])
+    assert not temp.exists()
+    assert state["status"] == "completed"
+    delivery = workspace.run("collect", handle["task_id"])
+    assert delivery["runtime_warnings"] == [
+        f"New entry in allowed_write_root: {workspace.repo / 'smoke-test-123'}"
+    ]
+
+
+def test_configured_temp_root(workspace: Workspace, tmp_path: Path) -> None:
+    temp_root = tmp_path / "custom" / "temp"
+    record = tmp_path / "temp-record"
+    workspace.env["FAKE_TEMP_RECORD"] = str(record)
+    workspace.env["FAKE_ROOT"] = str(workspace.repo)
+    workspace.settings.write_text(f'temp_root = "{temp_root}"\n' + workspace.settings.read_text())
+    workspace.mode("temporary_and_root_entries")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["declared/output.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    temp = temp_root / handle["task_id"]
+    assert record.read_text() == str(temp)
+    roots_arg = next(
+        x for x in workspace.calls()[0] if x.startswith("sandbox_workspace_write.writable_roots=")
+    )
+    assert str(temp) in json.loads(roots_arg.split("=", 1)[1])
+    assert state["status"] == "completed"
+    assert temp_root.is_dir() and not temp.exists()
+
+
+def test_command_only_task_removes_temp_on_cancellation(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    workspace.env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    record = tmp_path / "temp-record"
+    workspace.env["FAKE_TEMP_RECORD"] = str(record)
+    workspace.mode("temporary_hang")
+    handle = workspace.submit(role="verification-runner")
+    deadline = time.monotonic() + 10
+    while not record.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    temp = Path(record.read_text())
+    assert temp == tmp_path / "cache" / "tmp" / handle["task_id"]
+    assert temp.is_dir()
+    workspace.run("cancel", handle["task_id"])
+    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "cancelled"
+    assert not temp.exists()
 
 
 def test_submitting_returns_a_handle_without_waiting(workspace: Workspace) -> None:
@@ -121,6 +196,21 @@ def test_an_unverified_result_is_collected_without_being_reported_as_completed(
     assert state["status"] == "unverified"
     assert collected["status"] == "unverified"
     assert collected["result"]["status"] == "unverified"
+
+
+def test_writable_unverified_requires_finished_implementation(workspace: Workspace) -> None:
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+    workspace.mode("unverified_incomplete")
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["status"] == "failed"
+    assert state["failure_class"] == "incomplete_work"
+
+    workspace.mode("unverified_complete")
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["status"] == "unverified"
+    assert workspace.run("collect", handle["task_id"])["result"]["work_complete"] is True
 
 
 def test_a_worker_that_exits_nonzero_is_a_failure(workspace: Workspace) -> None:
@@ -337,3 +427,67 @@ def test_a_cancellation_stops_the_worker_without_signalling_the_supervisor(
     workspace.run("cancel", handle["task_id"])
 
     assert wait_for_terminal(workspace, handle["task_id"])["status"] == "cancelled"
+
+
+def test_incomplete_codex_session_resumes_to_completion(workspace: Workspace) -> None:
+    workspace.mode("resume_success")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    calls = workspace.calls()
+    assert state["status"] == "completed"
+    assert state["resume_count"] == 1
+    assert state["resume_results"][0]["result"]["work_complete"] is True
+    assert calls[1][-3:] == ["resume", "session-1", "-"]
+    assert (
+        calls[0][calls[0].index("--output-schema") + 1]
+        == (calls[1][calls[1].index("--output-schema") + 1])
+    )
+    assert "blockers" in (Path(state["task_dir"]) / "resume-prompt.md").read_text()
+
+
+def test_resume_limit_stops_different_blockers(workspace: Workspace) -> None:
+    workspace.settings.write_text(
+        workspace.settings.read_text().replace(
+            'adapter = "codex"', 'adapter = "codex"\nresume_limit = 1'
+        )
+    )
+    workspace.mode("resume_limit")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["failure_class"] == "incomplete_work"
+    assert state["resume_count"] == 1
+    assert len(workspace.calls()) == 2
+    assert state["resume_results"][0]["result"]["blockers"] == ["blocker-1"]
+
+
+def test_repeated_blockers_stop_before_limit(workspace: Workspace) -> None:
+    workspace.mode("resume_repeated")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["failure_class"] == "incomplete_work"
+    assert state["resume_count"] == 1
+    assert len(workspace.calls()) == 2
+
+
+def test_read_only_incomplete_result_does_not_resume(workspace: Workspace) -> None:
+    workspace.mode("unverified_incomplete")
+    state = wait_for_terminal(workspace, workspace.submit()["task_id"])
+    assert state["resume_count"] == 0
+    assert len(workspace.calls()) == 1
+
+
+def test_default_resume_limit_allows_two_attempts(workspace: Workspace) -> None:
+    workspace.mode("resume_limit")
+    packet = json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+    handle = workspace.submit(packet=packet, role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["failure_class"] == "incomplete_work"
+    assert state["resume_count"] == 2
+    assert [result["result"]["blockers"] for result in state["resume_results"]] == [
+        ["blocker-1"],
+        ["blocker-2"],
+    ]
+    assert len(workspace.calls()) == 3

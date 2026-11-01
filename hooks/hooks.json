@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/delegate\" reconcile --project-root \"${CLAUDE_PROJECT_DIR:-$PWD}\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/delegate\" _hook-reconcile --project-root \"${CLAUDE_PROJECT_DIR:-$PWD}\"",
             "timeout": 15
           }
         ]
