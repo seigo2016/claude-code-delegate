@@ -206,8 +206,9 @@ ledger they were submitted to. One Bash call may submit several independent
 tasks: the hook tracks every returned handle. After collecting one, it re-arms
 itself for any still-uncollected task from that same call.
 When Claude Code provides `CLAUDE_CODE_SESSION_ID`, submit records it and hooks
-only report that session's tasks. Older tasks and submissions without the ID
-retain the previous shared behavior. Manual `watch`, `reconcile`, and `collect`
+only report that session's tasks. Pending watches are stored per session; legacy
+pending watches migrate when their owner runs the hook. Submissions without the
+ID do not wake a session. Manual `watch`, `reconcile`, and `collect`
 remain project-wide diagnostic commands.
 
 ## What is and is not checked
