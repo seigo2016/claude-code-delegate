@@ -638,8 +638,10 @@ def test_ownerless_task_never_wakes_a_hook(
     if source == "session_registry":
         cli._remember_session_watch_group("session-1", [(workspace.repo, handle["task_id"])])
     result = hook_watch(
-        workspace, json.dumps(handle) if source == "handle" else "hidden",
-        cwd=tmp_path, seconds="0",
+        workspace,
+        json.dumps(handle) if source == "handle" else "hidden",
+        cwd=tmp_path,
+        seconds="0",
     )
     assert result.returncode == QUIET
     assert json.loads(result.stdout)["ready"] == []
@@ -663,15 +665,26 @@ def test_hook_reconcile_excludes_ownerless_and_foreign_tasks(
             time.sleep(0.05)
     payload = {} if session_id is None else {"session_id": session_id}
     result = subprocess.run(
-        [sys.executable, "-m", "delegate", "_hook-reconcile", "--project-root",
-         str(workspace.repo)],
-        input=json.dumps(payload), capture_output=True, text=True, env=workspace.env, cwd=tmp_path,
+        [
+            sys.executable,
+            "-m",
+            "delegate",
+            "_hook-reconcile",
+            "--project-root",
+            str(workspace.repo),
+        ],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=workspace.env,
+        cwd=tmp_path,
     )
     assert result.returncode == 0
     assert json.loads(result.stdout)["tasks"] == []
     assert json.loads(result.stdout)["ready"] == []
     assert {item["task_id"] for item in workspace.run("reconcile")["tasks"]} == {
-        owned["task_id"], ownerless["task_id"]
+        owned["task_id"],
+        ownerless["task_id"],
     }
     workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-2"
     assert workspace.run("status", owned["task_id"])["task_id"] == owned["task_id"]
@@ -686,8 +699,14 @@ def test_hook_watch_without_session_id_is_quiet(
     workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
     handle = workspace.submit()
     assert watch(workspace, seconds="20").returncode == WAKE
-    result = hook_watch(workspace, json.dumps(handle), cwd=tmp_path, seconds="0",
-                        session_id=session_id, event_name=event_name)
+    result = hook_watch(
+        workspace,
+        json.dumps(handle),
+        cwd=tmp_path,
+        seconds="0",
+        session_id=session_id,
+        event_name=event_name,
+    )
     assert result.returncode == QUIET
     assert json.loads(result.stdout)["ready"] == []
     owner = hook_watch(workspace, "hidden", cwd=tmp_path, session_id="session-1", seconds="0")
