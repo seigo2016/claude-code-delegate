@@ -53,3 +53,26 @@ def test_a_progress_update_cannot_revive_a_finished_task(tmp_path: Path) -> None
     events.update(task_dir, event_count=3)
 
     assert "event_count" not in store.read_json(task_dir / "state.json")
+
+
+def test_failure_transitions_always_record_one_line_details(tmp_path: Path) -> None:
+    for status, reason in [
+        ("failed", "launch_error"),
+        ("timeout", "timeout"),
+        ("degraded", "worker_gone_with_result"),
+        ("orphaned", "worker_gone"),
+    ]:
+        task_dir = make_task(tmp_path / status)
+        state = events.emit(task_dir, status, terminal_reason=reason)
+        assert state["failure_class"] == reason
+        assert state["failure_message"] == reason
+        assert store.read_json(task_dir / "state.json")["failure_message"] == reason
+
+    task_dir = make_task(tmp_path / "exception")
+    state = events.emit(
+        task_dir,
+        "failed",
+        terminal_reason="launch_error",
+        launch_error="OSError: first line\nsecond line",
+    )
+    assert state["failure_message"] == "OSError: first line"

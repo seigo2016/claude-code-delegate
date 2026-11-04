@@ -119,9 +119,8 @@ def _terminate(process: subprocess.Popen[bytes], grace: float = 2.0) -> None:
 
 def run(task_dir: Path) -> int:
     state = store.read_json(task_dir / "state.json")
-    adapter = registry.get(str(state["adapter"]))
-
     try:
+        adapter = registry.get(str(state["adapter"]))
         _supervise(task_dir, state, adapter)
     except liveness.AlreadyHeld:
         # This process writes nothing to a terminal, so the refusal has to land
@@ -129,6 +128,15 @@ def run(task_dir: Path) -> int:
         store.append_jsonl(
             task_dir / "events.jsonl",
             {"ts": events.now_iso(), "task_id": state["task_id"], "refused": "already_supervised"},
+        )
+        return 1
+    except Exception as error:
+        events.emit(
+            task_dir,
+            "failed",
+            terminal_reason="supervisor_error",
+            failure_class=type(error).__name__,
+            failure_message=str(error) or type(error).__name__,
         )
         return 1
     return 0

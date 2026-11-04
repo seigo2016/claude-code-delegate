@@ -54,6 +54,34 @@ def emit(task_dir: Path, status: str, **fields: Any) -> dict[str, Any]:
         if previous in TERMINAL_STATES and status != previous:
             return state
 
+        if status in {"failed", "timeout", "degraded", "orphaned"}:
+            reason = fields.get("terminal_reason") or state.get("terminal_reason") or status
+            failure_class = fields.get("failure_class") or state.get("failure_class") or reason
+            message = fields.get("failure_message") or state.get("failure_message")
+            if not message and status not in {"timeout", "degraded"}:
+                message = fields.get("launch_error")
+                if not message and state.get("stderr_path"):
+                    try:
+                        lines = (
+                            Path(state["stderr_path"])
+                            .read_text(encoding="utf-8", errors="replace")
+                            .splitlines()
+                        )
+                        message = next(
+                            (line.strip() for line in reversed(lines) if line.strip()), None
+                        )
+                    except OSError:
+                        pass
+            fields["failure_class"] = failure_class
+            fields["failure_message"] = next(
+                (
+                    line.strip()
+                    for line in str(message or failure_class).splitlines()
+                    if line.strip()
+                ),
+                str(failure_class),
+            )
+
         if status in TERMINAL_STATES and previous not in TERMINAL_STATES:
             before = state.get("root_entries_before", {})
             if before:

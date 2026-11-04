@@ -417,6 +417,7 @@ def submit(
         "exit_code": None,
         "terminal_reason": None,
         "failure_class": None,
+        "failure_message": None,
         "recovery_status": None,
         "recovered_result_path": None,
         "last_agent_message_path": None,
@@ -439,15 +440,25 @@ def submit(
     state = events.emit(task_dir, "starting")
     register_completion_watch(project_root, task_id)
 
-    worker_process = subprocess.Popen(
-        [sys.executable, "-m", "delegate", "_run", str(task_dir)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        cwd=project_root,
-        start_new_session=True,
-        close_fds=True,
-    )
+    try:
+        worker_process = subprocess.Popen(
+            [sys.executable, "-m", "delegate", "_run", str(task_dir)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            cwd=project_root,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError as error:
+        state = events.emit(
+            task_dir,
+            "failed",
+            terminal_reason="launch_error",
+            failure_class=type(error).__name__,
+            failure_message=str(error) or type(error).__name__,
+        )
+        return handle_of(state)
     # The supervisor reports itself running once it holds the lock. Saying so
     # here would leave a window where the task looks alive but nothing holds it.
     state = events.update_returning(task_dir, pid=worker_process.pid)
