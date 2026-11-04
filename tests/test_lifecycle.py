@@ -491,3 +491,22 @@ def test_default_resume_limit_allows_two_attempts(workspace: Workspace) -> None:
         ["blocker-2"],
     ]
     assert len(workspace.calls()) == 3
+
+
+def test_nonzero_exit_records_stderr_failure_details_for_collect(workspace: Workspace) -> None:
+    workspace.mode("nonzero_exit")
+    handle = workspace.submit()
+    state = wait_for_terminal(workspace, handle["task_id"])
+    delivery = workspace.run("collect", handle["task_id"])
+    assert state["failure_class"] == "nonzero_exit"
+    assert state["failure_message"] == "something broke"
+    assert delivery["failure_class"] == state["failure_class"]
+    assert delivery["failure_message"] == state["failure_message"]
+
+
+def test_timeout_records_a_failure_message(workspace: Workspace) -> None:
+    workspace.mode("tool_hang")
+    handle = workspace.submit(role="impatient")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["failure_message"] == "tool_stall"
+    assert workspace.run("collect", handle["task_id"])["failure_message"] == "tool_stall"

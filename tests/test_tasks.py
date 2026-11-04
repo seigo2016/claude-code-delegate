@@ -519,3 +519,24 @@ def test_skill_reports_incomplete_and_unverified_results() -> None:
         in skill
     )
     assert "the work did not happen" not in skill
+
+
+def test_submit_records_supervisor_launch_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise OSError("supervisor could not start\nadditional detail")
+
+    monkeypatch.setattr(tasks.subprocess, "Popen", fail)
+    role = config.Role(name="auditor", level="standard")
+    handle = tasks.submit(
+        project_root=tmp_path,
+        settings=settings(role),
+        role=role.name,
+        title="audit",
+        value=packet(),
+    )
+    state = json.loads((tasks.task_root(tmp_path) / handle["task_id"] / "state.json").read_text())
+    assert state["status"] == "failed"
+    assert state["failure_class"] == "OSError"
+    assert state["failure_message"] == "supervisor could not start"

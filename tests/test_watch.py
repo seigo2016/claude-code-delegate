@@ -526,3 +526,39 @@ def test_only_one_watcher_per_project_waits_at_a_time(workspace: Workspace) -> N
         second = watch(workspace, seconds="20")
 
     assert second.returncode == QUIET
+
+
+def test_collected_orphan_and_decision_are_not_announced_again(workspace: Workspace) -> None:
+    workspace.mode("nonzero_exit")
+    handle = workspace.submit()
+    assert watch(workspace, seconds="20").returncode == WAKE
+    task_dir = workspace.repo / ".claude" / "logs" / "delegate" / handle["task_id"]
+    state_path = task_dir / "state.json"
+    state = json.loads(state_path.read_text())
+    state.update(status="running", terminal_reason=None, terminal_at=None)
+    state_path.write_text(json.dumps(state))
+    assert watch(workspace).returncode == WAKE
+    assert workspace.run("collect", handle["task_id"])["status"] == "orphaned"
+    assert watch(workspace).returncode == QUIET
+    assert workspace.run("reconcile")["ready"] == []
+
+    workspace.mode("decision_needed")
+    decision = workspace.submit(title="decision")
+    assert watch(workspace, seconds="20").returncode == WAKE
+    assert workspace.run("collect", decision["task_id"])["status"] == "decision_needed"
+    assert watch(workspace).returncode == QUIET
+
+
+def test_foreign_session_handle_does_not_wake_or_consume_owner_watch(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "owner"
+    handle = workspace.submit()
+    foreign = hook_watch(
+        workspace, json.dumps(handle), cwd=tmp_path, session_id="other", seconds="0"
+    )
+    assert foreign.returncode == QUIET
+    assert json.loads(foreign.stdout)["ready"] == []
+    owner = hook_watch(workspace, "hidden handle", cwd=tmp_path, session_id="owner", seconds="20")
+    assert owner.returncode == WAKE
+    assert [item["task_id"] for item in json.loads(owner.stdout)["ready"]] == [handle["task_id"]]
