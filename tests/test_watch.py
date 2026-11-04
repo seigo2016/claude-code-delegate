@@ -27,6 +27,11 @@ WAKE = 2
 QUIET = 0
 
 
+@pytest.fixture(autouse=True)
+def default_submitter_session(workspace: Workspace) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
+
+
 def watch(workspace: Workspace, seconds: str = "1") -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "delegate", "watch"],
@@ -43,14 +48,15 @@ def hook_watch(
     *,
     cwd: Path,
     seconds: str = "1",
-    session_id: str = "session-1",
+    session_id: str | None = "session-1",
     event_name: str = "PostToolUse",
 ) -> subprocess.CompletedProcess[str]:
     hook_input = {
-        "session_id": session_id,
         "hook_event_name": event_name,
         "tool_name": "Bash",
     }
+    if session_id is not None:
+        hook_input["session_id"] = session_id
     if event_name == "PostToolUse":
         hook_input["tool_response"] = {
             "stdout": tool_stdout,
@@ -562,3 +568,146 @@ def test_foreign_session_handle_does_not_wake_or_consume_owner_watch(
     owner = hook_watch(workspace, "hidden handle", cwd=tmp_path, session_id="owner", seconds="20")
     assert owner.returncode == WAKE
     assert [item["task_id"] for item in json.loads(owner.stdout)["ready"]] == [handle["task_id"]]
+
+
+def test_pending_watches_are_isolated_across_project_sessions(
+    workspace: Workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "owner"
+    handle = workspace.submit()
+    assert watch(workspace, seconds="20").returncode == WAKE
+    monkeypatch.setenv("DELEGATE_WATCH_ROOT", workspace.env["DELEGATE_WATCH_ROOT"])
+    pending = tasks._completion_watch_path("owner", workspace.repo, handle["task_id"])
+    legacy = Path(workspace.env["DELEGATE_WATCH_ROOT"]) / "pending-submissions"
+    assert pending.exists()
+    assert list(legacy.glob("*.json")) == []
+    other_project = tmp_path / "other-project"
+    other_project.mkdir()
+    foreign = hook_watch(workspace, "hidden", cwd=other_project, session_id="other", seconds="0")
+    assert foreign.returncode == QUIET
+    assert json.loads(foreign.stdout)["ready"] == []
+    assert pending.exists()
+    assert not (tasks.task_root(workspace.repo) / handle["task_id"] / "watch.lock").exists()
+    tasks.clear_pending_completion_watches("other", [handle])
+    assert pending.exists()
+    owner = hook_watch(workspace, "hidden", cwd=workspace.repo, session_id="owner", seconds="0")
+    assert owner.returncode == WAKE
+    assert [item["task_id"] for item in json.loads(owner.stdout)["ready"]] == [handle["task_id"]]
+
+
+def test_legacy_pending_watch_migrates_only_for_owner(
+    workspace: Workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "owner"
+    handle = workspace.submit()
+    assert watch(workspace, seconds="20").returncode == WAKE
+    monkeypatch.setenv("DELEGATE_WATCH_ROOT", workspace.env["DELEGATE_WATCH_ROOT"])
+    pending = tasks._completion_watch_path("owner", workspace.repo, handle["task_id"])
+    legacy = Path(workspace.env["DELEGATE_WATCH_ROOT"]) / "pending-submissions" / pending.name
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    pending.rename(legacy)
+    assert tasks.pending_completion_watches("other") == []
+    assert legacy.exists() and not pending.exists()
+    assert tasks.pending_completion_watches("owner") == [
+        {"project_root": str(workspace.repo), "task_id": handle["task_id"]}
+    ]
+    assert pending.exists() and not legacy.exists()
+    owner = hook_watch(workspace, "hidden", cwd=tmp_path, session_id="owner", seconds="0")
+    assert owner.returncode == WAKE
+    assert json.loads(owner.stdout)["ready"][0]["task_id"] == handle["task_id"]
+
+
+@pytest.mark.parametrize("source", ["pending", "handle", "session_registry"])
+def test_ownerless_task_never_wakes_a_hook(
+    workspace: Workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    workspace.env.pop("CLAUDE_CODE_SESSION_ID", None)
+    handle = workspace.submit()
+    assert watch(workspace, seconds="20").returncode == WAKE
+    monkeypatch.setenv("DELEGATE_WATCH_ROOT", workspace.env["DELEGATE_WATCH_ROOT"])
+    assert list(Path(workspace.env["DELEGATE_WATCH_ROOT"]).rglob("*.json")) == []
+    if source == "pending":
+        legacy = Path(workspace.env["DELEGATE_WATCH_ROOT"]) / "pending-submissions" / "old.json"
+        store.write_json(
+            legacy, {"project_root": str(workspace.repo), "task_id": handle["task_id"]}
+        )
+        assert tasks.pending_completion_watches("session-1") == []
+        assert legacy.exists()
+    if source != "pending":
+        tasks.clear_pending_completion_watches("session-1", [handle])
+    if source == "session_registry":
+        cli._remember_session_watch_group("session-1", [(workspace.repo, handle["task_id"])])
+    result = hook_watch(
+        workspace,
+        json.dumps(handle) if source == "handle" else "hidden",
+        cwd=tmp_path,
+        seconds="0",
+    )
+    assert result.returncode == QUIET
+    assert json.loads(result.stdout)["ready"] == []
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-2"
+    assert workspace.run("status", handle["task_id"])["task_id"] == handle["task_id"]
+    assert workspace.run("collect", handle["task_id"])["task_id"] == handle["task_id"]
+
+
+@pytest.mark.parametrize("session_id", [None, "", "session-2"])
+def test_hook_reconcile_excludes_ownerless_and_foreign_tasks(
+    workspace: Workspace, tmp_path: Path, session_id: str | None
+) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
+    owned = workspace.submit(title="owned")
+    workspace.env.pop("CLAUDE_CODE_SESSION_ID")
+    ownerless = workspace.submit(title="ownerless")
+    deadline = time.monotonic() + 20
+    for handle in (owned, ownerless):
+        while workspace.run("status", handle["task_id"])["status"] not in events.TERMINAL_STATES:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+    payload = {} if session_id is None else {"session_id": session_id}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "delegate",
+            "_hook-reconcile",
+            "--project-root",
+            str(workspace.repo),
+        ],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=workspace.env,
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["tasks"] == []
+    assert json.loads(result.stdout)["ready"] == []
+    assert {item["task_id"] for item in workspace.run("reconcile")["tasks"]} == {
+        owned["task_id"],
+        ownerless["task_id"],
+    }
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-2"
+    assert workspace.run("status", owned["task_id"])["task_id"] == owned["task_id"]
+    assert workspace.run("collect", owned["task_id"])["task_id"] == owned["task_id"]
+
+
+@pytest.mark.parametrize("session_id", [None, ""])
+@pytest.mark.parametrize("event_name", ["PostToolUse", "PostToolUseFailure"])
+def test_hook_watch_without_session_id_is_quiet(
+    workspace: Workspace, tmp_path: Path, session_id: str | None, event_name: str
+) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
+    handle = workspace.submit()
+    assert watch(workspace, seconds="20").returncode == WAKE
+    result = hook_watch(
+        workspace,
+        json.dumps(handle),
+        cwd=tmp_path,
+        seconds="0",
+        session_id=session_id,
+        event_name=event_name,
+    )
+    assert result.returncode == QUIET
+    assert json.loads(result.stdout)["ready"] == []
+    owner = hook_watch(workspace, "hidden", cwd=tmp_path, session_id="session-1", seconds="0")
+    assert owner.returncode == WAKE

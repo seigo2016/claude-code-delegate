@@ -196,9 +196,8 @@ def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> in
     reconciled = [
         _reconcile_state(state)
         for state in _states(project_root)
-        if not session_id
-        or not state.get("submitter_session_id")
-        or state["submitter_session_id"] == session_id
+        if session_id is None
+        or (bool(session_id) and state.get("submitter_session_id") == session_id)
     ]
     ready = [
         _line(state)
@@ -220,7 +219,7 @@ def cmd_hook_reconcile(args: argparse.Namespace) -> int:
         session_id = json.load(sys.stdin).get("session_id")
     except (ValueError, AttributeError):
         session_id = None
-    return cmd_reconcile(args, session_id if isinstance(session_id, str) else None)
+    return cmd_reconcile(args, session_id if isinstance(session_id, str) else "")
 
 
 #: An ``asyncRewake`` hook wakes the session on exit code 2 and on no other code,
@@ -359,7 +358,7 @@ def _watch_tasks_from_handles(
         ):
             raise ValueError("task handle does not match task state")
         owner = state.get("submitter_session_id")
-        if session_id and owner and owner != session_id:
+        if session_id is not None and (not session_id or owner != session_id):
             continue
         identity = (project_root, state["task_id"])
         if identity not in seen:
@@ -425,7 +424,7 @@ def cmd_hook_watch(args: argparse.Namespace) -> int:
         return QUIET
     _remember_watch_group(submitted)
     _remember_session_watch_group(session_id, submitted)
-    tasks.clear_pending_completion_watches(registered)
+    tasks.clear_pending_completion_watches(session_id, registered)
     result = _watch_tasks(watched)
     if result == WAKE:
         _prune_session_watches(session_id)

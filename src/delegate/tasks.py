@@ -65,27 +65,34 @@ def _completion_watch_registry_root() -> Path:
     return Path.home() / ".claude" / "delegate" / "watch-sessions"
 
 
-def _completion_watch_path(project_root: Path, task_id: str) -> Path:
+def _completion_watch_path(session_id: str, project_root: Path, task_id: str) -> Path:
     identity = f"{project_root}\0{task_id}".encode()
     return (
         _completion_watch_registry_root()
-        / "pending-submissions"
+        / hashlib.sha256(session_id.encode()).hexdigest()
+        / "pending"
         / (hashlib.sha256(identity).hexdigest() + ".json")
     )
 
 
-def register_completion_watch(project_root: Path, task_id: str) -> None:
+def register_completion_watch(project_root: Path, task_id: str, session_id: str | None) -> None:
     """Make a submitted task discoverable even if a shell pipeline hides its handle."""
+    if not session_id:
+        return
     store.write_json(
-        _completion_watch_path(project_root, task_id),
+        _completion_watch_path(session_id, project_root, task_id),
         {"project_root": str(project_root), "task_id": task_id},
     )
 
 
 def pending_completion_watches(session_id: str | None = None) -> list[dict[str, str]]:
-    root = _completion_watch_registry_root() / "pending-submissions"
+    if not session_id:
+        return []
+    root = _completion_watch_registry_root()
     found: list[dict[str, str]] = []
-    for path in sorted(root.glob("*.json")):
+    session_root = root / hashlib.sha256(session_id.encode()).hexdigest() / "pending"
+    legacy_root = root / "pending-submissions"
+    for path in [*sorted(session_root.glob("*.json")), *sorted(legacy_root.glob("*.json"))]:
         try:
             value = store.read_json(path)
         except (OSError, ValueError, json.JSONDecodeError):
@@ -98,15 +105,23 @@ def pending_completion_watches(session_id: str | None = None) -> list[dict[str, 
             except (OSError, ValueError, json.JSONDecodeError):
                 continue
             owner = state.get("submitter_session_id")
-            if session_id and owner and owner != session_id:
+            if owner != session_id:
                 continue
+            if path.parent == legacy_root:
+                destination = _completion_watch_path(
+                    session_id, Path(value["project_root"]), value["task_id"]
+                )
+                store.write_json(destination, value)
+                path.unlink(missing_ok=True)
             found.append({"project_root": value["project_root"], "task_id": value["task_id"]})
     return found
 
 
-def clear_pending_completion_watches(watches: list[dict[str, str]]) -> None:
+def clear_pending_completion_watches(session_id: str, watches: list[dict[str, str]]) -> None:
+    if not session_id:
+        return
     for watch in watches:
-        path = _completion_watch_path(Path(watch["project_root"]), watch["task_id"])
+        path = _completion_watch_path(session_id, Path(watch["project_root"]), watch["task_id"])
         path.unlink(missing_ok=True)
 
 
@@ -438,7 +453,7 @@ def submit(
     (task_dir / "prompt.md").write_text(compose_prompt(project_root, plan, value), encoding="utf-8")
     store.write_json(task_dir / "state.json", state)
     state = events.emit(task_dir, "starting")
-    register_completion_watch(project_root, task_id)
+    register_completion_watch(project_root, task_id, submitter_session_id)
 
     try:
         worker_process = subprocess.Popen(
