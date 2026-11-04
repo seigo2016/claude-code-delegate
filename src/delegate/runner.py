@@ -131,6 +131,8 @@ def run(task_dir: Path) -> int:
         )
         return 1
     except Exception as error:
+        if store.read_json(task_dir / "state.json").get("status") in events.TERMINAL_STATES:
+            return 1
         events.emit(
             task_dir,
             "failed",
@@ -143,7 +145,15 @@ def run(task_dir: Path) -> int:
 
 
 def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) -> None:
-    with liveness.hold(Path(state["lock_path"])):
+    process: subprocess.Popen[bytes] | None = None
+
+    def cleanup_worker() -> None:
+        if process is not None and process.poll() is None:
+            _terminate(process)
+            process.wait()
+
+    with liveness.hold(Path(state["lock_path"])), contextlib.ExitStack() as cleanup:
+        cleanup.callback(cleanup_worker)
         # A cancellation can land between the handover and this lock. Reading the
         # state again here is the only way to see one that arrived in that gap.
         state = store.read_json(task_dir / "state.json")
@@ -203,7 +213,6 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             ).strip()
 
         cancelled = False
-        process: subprocess.Popen[bytes] | None = None
 
         def on_signal(_signum: int, _frame: Any) -> None:
             nonlocal cancelled

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.2.11
+
+- Record failure_class and a one-line failure_message for failed, timed-out, degraded and orphaned tasks, including supervisor errors.
+- Terminate an already-started worker when the supervisor fails, and keep a single terminal event.
+- Do not announce collected terminal tasks (including orphaned and decision_needed) again.
+
 - Make worker result schemas compatible with strict structured outputs; use nullable report, counts, and coverage fields.
 
 - Route completion hooks to the submitting Claude Code session when its ID is available.
