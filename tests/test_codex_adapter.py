@@ -7,7 +7,7 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import pytest
 
@@ -338,7 +338,7 @@ def test_concurrent_preparation_separates_sources_and_is_atomic(tmp_path: Path) 
 
 
 def test_fast_command_changes_only_fast_options(tmp_path: Path) -> None:
-    options = dict(
+    options: dict[str, Any] = dict(
         project_root=tmp_path,
         prompt_path=tmp_path / "prompt",
         result_path=tmp_path / "result",
