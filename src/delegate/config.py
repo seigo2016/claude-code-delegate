@@ -36,12 +36,14 @@ class Role:
     preferred_worker: str | None = None
     allowed_escalation_reasons: tuple[str, ...] = ()
     requires_explicit_user_direction: bool = False
+    fast: bool | None = None
 
 
 @dataclass(frozen=True)
 class Level:
     model: str
     effort: str
+    fast: bool = False
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class Plan:
     model: str
     effort: str
     timeout: int
+    fast: bool = False
     denied_read_paths: tuple[str, ...] = ()
     isolate_home: bool = True
     resume_limit: int = 2
@@ -77,7 +80,7 @@ class Settings:
     denied_read_paths: tuple[str, ...] = ()
     temp_root: str | None = None
 
-    def plan(self, role_name: str, *, worker: str | None = None) -> Plan:
+    def plan(self, role_name: str, *, worker: str | None = None, fast: bool | None = None) -> Plan:
         role = self.roles.get(role_name)
         if role is None:
             known = ", ".join(sorted(self.roles)) or "none configured"
@@ -90,6 +93,12 @@ class Settings:
                 f"{chosen.name} does not define level {role.level}; "
                 f"add it under [workers.{chosen.name}]"
             )
+        if fast is True and chosen.adapter != "codex":
+            raise ConfigError("--fast requires a Codex worker")
+        resolved_fast = (
+            fast if fast is not None else role.fast if role.fast is not None else level.fast
+        )
+        resolved_fast = resolved_fast if chosen.adapter == "codex" else False
         return Plan(
             role=role,
             worker=chosen.name,
@@ -97,6 +106,7 @@ class Settings:
             model=level.model,
             effort=level.effort,
             timeout=role.timeout,
+            fast=resolved_fast,
             denied_read_paths=self.denied_read_paths,
             isolate_home=chosen.isolate_home,
             resume_limit=chosen.resume_limit,
@@ -231,6 +241,7 @@ def load(path: Path) -> Settings:
             instructions=str(body["instructions"]) if "instructions" in body else None,
             preferred_worker=_optional_nonempty_string(body, "preferred_worker", where),
             allowed_escalation_reasons=_string_values(body, "allowed_escalation_reasons", where),
+            fast=_optional_bool(body, "fast", where) if "fast" in body else None,
             requires_explicit_user_direction=_optional_bool(
                 body, "requires_explicit_user_direction", where
             ),
@@ -244,6 +255,7 @@ def load(path: Path) -> Settings:
                 level: Level(
                     model=str(_required(entry, "model", f"workers.{name}.{level}")),
                     effort=str(_required(entry, "effort", f"workers.{name}.{level}")),
+                    fast=_optional_bool(entry, "fast", f"workers.{name}.{level}"),
                 )
                 for level, entry in body.items()
                 if isinstance(entry, dict)

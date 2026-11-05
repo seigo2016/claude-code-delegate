@@ -335,3 +335,34 @@ def test_concurrent_preparation_separates_sources_and_is_atomic(tmp_path: Path) 
         assert home is not None
         assert (home / "auth.json").resolve() == source / "auth.json"
         assert (home / "config.toml").read_text() == codex.MINIMAL_CONFIG
+
+
+def test_fast_command_changes_only_fast_options(tmp_path: Path) -> None:
+    options = dict(
+        project_root=tmp_path,
+        prompt_path=tmp_path / "prompt",
+        result_path=tmp_path / "result",
+        schema_path=tmp_path / "schema",
+        model="model",
+        effort="high",
+        writes_allowed=False,
+        runs_commands=False,
+        isolate_home=False,
+    )
+    default = ADAPTER.build_command(**options)
+    assert ADAPTER.build_command(**options, fast=False) == default
+    fast = ADAPTER.build_command(**options, fast=True)
+    assert fast == [
+        *default[:-3],
+        "-c",
+        "features.fast_mode=true",
+        "-c",
+        'service_tier="fast"',
+        "-",
+    ]
+    assert ADAPTER.build_resume_command(session_id="abc", **options, fast=True) == [
+        *fast[:-1],
+        "resume",
+        "abc",
+        "-",
+    ]

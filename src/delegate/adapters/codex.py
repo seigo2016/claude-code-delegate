@@ -157,6 +157,7 @@ class CodexAdapter:
         timeout_sec: int = 1800,
         isolate_home: bool | None = None,
         temp_dir: Path | None = None,
+        fast: bool = False,
     ) -> list[str]:
         del allowed_read_roots
         del timeout_sec
@@ -202,8 +203,11 @@ class CodexAdapter:
             f"sandbox_workspace_write.writable_roots={roots}",
             "--output-schema",
             str(schema_path),
-            "--disable",
-            "fast_mode",
+            *(
+                ["-c", "features.fast_mode=true", "-c", 'service_tier="fast"']
+                if fast
+                else ["--disable", "fast_mode"]
+            ),
             "-",
         ]
         effective_isolate = isolate_home
