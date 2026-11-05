@@ -101,6 +101,17 @@ up to twice; set `resume_limit` under `[workers.codex]` to change that limit (ze
 disables resumes). Identical consecutive blocker lists stop retries. The task's
 `state.json` records `resume_count` and `resume_results` for each attempt.
 
+Codex fast mode is opt-in and defaults to false. Set `fast = true` in a Codex
+worker level (for example, `standard = { model = "...", effort = "high", fast = true }`)
+or on a role; the role overrides the level. `delegate submit --fast` and
+`--no-fast` override either setting for a single task. `--fast` requires a Codex
+worker. The resolved value appears in the submit handle and task status, and is
+preserved for resumes. Fast mode may incur higher costs and depends on model and
+account availability. The opt-in passes `features.fast_mode=true` and
+`service_tier="fast"` to Codex. When using an unisolated home, existing Codex
+settings may independently affect the service tier; false retains the existing
+command and disables the Codex fast-mode feature.
+
 Roles that ship in the example: `artifact-auditor`, `repo-cartographer`,
 `bounded-implementer`, `verification-runner`, `consistency-auditor`,
 `adversarial-critic`.

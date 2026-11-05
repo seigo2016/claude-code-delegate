@@ -223,7 +223,9 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     return "\n".join(lines) + "\n"
 
 
-def _find_duplicate(root: Path, key: str, session_id: str | None = None) -> dict[str, Any] | None:
+def _find_duplicate(
+    root: Path, key: str, session_id: str | None = None, *, fast: bool = False
+) -> dict[str, Any] | None:
     """The identical task that is still running, if there is one.
 
     Only a task still in flight counts. Matching finished ones too would answer a
@@ -241,6 +243,7 @@ def _find_duplicate(root: Path, key: str, session_id: str | None = None) -> dict
             state.get("fingerprint") == key
             and state.get("status") in events.ACTIVE_STATES
             and state.get("submitter_session_id") == session_id
+            and state.get("fast", False) == fast
         ):
             return state
     return None
@@ -255,6 +258,7 @@ def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str,
         "worker": state["worker"],
         "model": state["model"],
         "effort": state["effort"],
+        "fast": state.get("fast", False),
         "deduplicated": deduplicated,
         "next_action": "end_turn",
         "completion_delivery": "async_rewake",
@@ -339,12 +343,13 @@ def submit(
     title: str,
     value: dict[str, Any],
     worker: str | None = None,
+    fast: bool | None = None,
 ) -> dict[str, Any]:
     packet_module.validate(value)
     if value["host_only"]:
         raise SubmitRefused("host_only work must stay in Claude Code", run_in="claude-code")
 
-    plan = settings.plan(role, worker=worker)
+    plan = settings.plan(role, worker=worker, fast=fast)
     escalation_reason = value.get("escalation_reason")
     if plan.role.allowed_escalation_reasons:
         if escalation_reason is None:
@@ -391,7 +396,7 @@ def submit(
     root.mkdir(parents=True, exist_ok=True)
     key = fingerprint(project_root, role, title, value)
     submitter_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID") or None
-    duplicate = _find_duplicate(root, key, submitter_session_id)
+    duplicate = _find_duplicate(root, key, submitter_session_id, fast=plan.fast)
     if duplicate is not None:
         return handle_of(duplicate, deduplicated=True)
 
@@ -412,6 +417,7 @@ def submit(
         "adapter": plan.adapter,
         "model": plan.model,
         "effort": plan.effort,
+        "fast": plan.fast,
         "escalation_reason": escalation_reason,
         "user_directed": bool(value.get("user_directed", False)),
         # Decided here rather than at run time so that a finished task can still

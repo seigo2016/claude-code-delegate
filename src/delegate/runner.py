@@ -196,6 +196,8 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             allowed_write_roots=tuple(state.get("allowed_write_roots", ())),
             timeout_sec=int(state.get("timeout_sec", 1800)),
         )
+        if state["adapter"] == "codex" and state.get("fast", False):
+            command_args["fast"] = True
         if state["adapter"] == "codex" and "isolate_home" in state:
             command_args["isolate_home"] = state["isolate_home"]
         if state["adapter"] == "codex" and temp_dir is not None:

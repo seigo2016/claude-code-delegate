@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.2.13
+
+- Add opt-in Codex fast mode per worker level, role, or submit flag, and record its resolved value.
+
 ## 0.2.12
 
 - Restrict hook completion notices and session-start ready lists to tasks owned by the submitting session; tasks without a session ID remain available for explicit collection.
