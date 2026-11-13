@@ -76,3 +76,40 @@ def test_failure_transitions_always_record_one_line_details(tmp_path: Path) -> N
         launch_error="OSError: first line\nsecond line",
     )
     assert state["failure_message"] == "OSError: first line"
+
+
+def test_claim_delivery_records_the_first_claim_and_refuses_the_second(tmp_path: Path) -> None:
+    task_dir = make_task(tmp_path, "completed")
+
+    state, claimed = events.claim_delivery(task_dir, delivered_to={"kind": "session", "id": "a"})
+    again, claimed_again = events.claim_delivery(
+        task_dir, delivered_to={"kind": "session", "id": "b"}
+    )
+
+    assert claimed is True and claimed_again is False
+    assert state["delivered_at"] and state["delivered_to"] == {"kind": "session", "id": "a"}
+    assert again["delivered_to"] == {"kind": "session", "id": "a"}
+    assert again["delivered_at"] == state["delivered_at"]
+    log = (task_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(log) == 1
+
+
+def test_only_one_of_many_concurrent_claims_wins(tmp_path: Path) -> None:
+    import threading
+
+    task_dir = make_task(tmp_path, "completed")
+    start = threading.Barrier(16)
+    outcomes: list[bool] = []
+
+    def claim() -> None:
+        start.wait()
+        outcomes.append(events.claim_delivery(task_dir)[1])
+
+    threads = [threading.Thread(target=claim) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert outcomes.count(True) == 1
+    assert len((task_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()) == 1

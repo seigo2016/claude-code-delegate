@@ -98,7 +98,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
         state["status"] == "degraded" and state.get("recovery_status") == "usable"
     ):
         result = envelope.chair_display(store.read_json(Path(state["result_path"])))
-    state = events.emit(task_dir, state["status"], delivered_at=events.now_iso())
+    state, claimed = events.claim_delivery(task_dir)
+    if not claimed:
+        return _fail("already_delivered", 3, delivered_at=state["delivered_at"])
     delivery = {
         "task_id": state["task_id"],
         "status": state["status"],

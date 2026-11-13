@@ -50,57 +50,77 @@ def _held(task_dir: Path) -> Generator[dict[str, Any], None, None]:
 
 def emit(task_dir: Path, status: str, **fields: Any) -> dict[str, Any]:
     with _held(task_dir) as state:
-        previous = state.get("status")
-        if previous in TERMINAL_STATES and status != previous:
-            return state
+        return _emit_locked(task_dir, state, status, fields)
 
-        if status in {"failed", "timeout", "degraded", "orphaned"}:
-            reason = fields.get("terminal_reason") or state.get("terminal_reason") or status
-            failure_class = fields.get("failure_class") or state.get("failure_class") or reason
-            message = fields.get("failure_message") or state.get("failure_message")
-            if not message and status not in {"timeout", "degraded"}:
-                message = fields.get("launch_error")
-                if not message and state.get("stderr_path"):
-                    try:
-                        lines = (
-                            Path(state["stderr_path"])
-                            .read_text(encoding="utf-8", errors="replace")
-                            .splitlines()
-                        )
-                        message = next(
-                            (line.strip() for line in reversed(lines) if line.strip()), None
-                        )
-                    except OSError:
-                        pass
-            fields["failure_class"] = failure_class
-            fields["failure_message"] = next(
-                (
-                    line.strip()
-                    for line in str(message or failure_class).splitlines()
-                    if line.strip()
-                ),
-                str(failure_class),
+
+def claim_delivery(
+    task_dir: Path, delivered_to: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], bool]:
+    """Record that a finished task was handed over, unless it already was.
+
+    The check and the write share one lock hold, so of any number of concurrent
+    collectors exactly one gets ``True``; the rest get the state as it stands.
+    """
+    with _held(task_dir) as state:
+        if state.get("delivered_at"):
+            return state, False
+        updated = _emit_locked(
+            task_dir,
+            state,
+            state["status"],
+            {"delivered_at": now_iso(), "delivered_to": delivered_to},
+        )
+        return updated, True
+
+
+def _emit_locked(
+    task_dir: Path, state: dict[str, Any], status: str, fields: dict[str, Any]
+) -> dict[str, Any]:
+    previous = state.get("status")
+    if previous in TERMINAL_STATES and status != previous:
+        return state
+
+    if status in {"failed", "timeout", "degraded", "orphaned"}:
+        reason = fields.get("terminal_reason") or state.get("terminal_reason") or status
+        failure_class = fields.get("failure_class") or state.get("failure_class") or reason
+        message = fields.get("failure_message") or state.get("failure_message")
+        if not message and status not in {"timeout", "degraded"}:
+            message = fields.get("launch_error")
+            if not message and state.get("stderr_path"):
+                try:
+                    lines = (
+                        Path(state["stderr_path"])
+                        .read_text(encoding="utf-8", errors="replace")
+                        .splitlines()
+                    )
+                    message = next((line.strip() for line in reversed(lines) if line.strip()), None)
+                except OSError:
+                    pass
+        fields["failure_class"] = failure_class
+        fields["failure_message"] = next(
+            (line.strip() for line in str(message or failure_class).splitlines() if line.strip()),
+            str(failure_class),
+        )
+
+    if status in TERMINAL_STATES and previous not in TERMINAL_STATES:
+        before = state.get("root_entries_before", {})
+        if before:
+            packet = store.read_json(task_dir / "packet.json")
+            fields["root_entry_warnings"] = workspace.new_root_entries(
+                before, Path(state["project_root"]), packet["allowed_writes"]
             )
+        if state.get("temp_dir"):
+            shutil.rmtree(state["temp_dir"], ignore_errors=True)
 
-        if status in TERMINAL_STATES and previous not in TERMINAL_STATES:
-            before = state.get("root_entries_before", {})
-            if before:
-                packet = store.read_json(task_dir / "packet.json")
-                fields["root_entry_warnings"] = workspace.new_root_entries(
-                    before, Path(state["project_root"]), packet["allowed_writes"]
-                )
-            if state.get("temp_dir"):
-                shutil.rmtree(state["temp_dir"], ignore_errors=True)
-
-        ts = now_iso()
-        record = {"ts": ts, "task_id": state["task_id"], "status": status, **fields}
-        store.append_jsonl(task_dir / "events.jsonl", record)
-        store.append_jsonl(task_dir.parent / "events.jsonl", record)
-        updated = {**state, **fields, "status": status, "updated_at": ts}
-        if status in TERMINAL_STATES and not updated.get("terminal_at"):
-            updated["terminal_at"] = ts
-        store.write_json(_state_path(task_dir), updated)
-        return updated
+    ts = now_iso()
+    record = {"ts": ts, "task_id": state["task_id"], "status": status, **fields}
+    store.append_jsonl(task_dir / "events.jsonl", record)
+    store.append_jsonl(task_dir.parent / "events.jsonl", record)
+    updated = {**state, **fields, "status": status, "updated_at": ts}
+    if status in TERMINAL_STATES and not updated.get("terminal_at"):
+        updated["terminal_at"] = ts
+    store.write_json(_state_path(task_dir), updated)
+    return updated
 
 
 def update_returning(task_dir: Path, **fields: Any) -> dict[str, Any]:

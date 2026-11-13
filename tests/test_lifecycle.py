@@ -140,6 +140,34 @@ def test_a_finished_task_is_delivered_once(workspace: Workspace) -> None:
     assert again["error"] == "already_delivered"
 
 
+def test_concurrent_collects_deliver_exactly_once(workspace: Workspace) -> None:
+    import subprocess
+    import sys
+
+    handle = workspace.submit()
+    wait_for_terminal(workspace, handle["task_id"])
+
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-m", "delegate", "collect", handle["task_id"]],
+            stdout=subprocess.PIPE,
+            text=True,
+            env=workspace.env,
+            cwd=workspace.repo,
+        )
+        for _ in range(8)
+    ]
+    outputs = [(process.communicate()[0], process.returncode) for process in processes]
+
+    assert sorted(code for _, code in outputs) == [0] + [3] * 7
+    for out, code in outputs:
+        if code == 3:
+            assert json.loads(out)["error"] == "already_delivered"
+    events_log = Path(workspace.run("status", handle["task_id"])["task_dir"]) / "events.jsonl"
+    delivered = [line for line in events_log.read_text().splitlines() if "delivered_at" in line]
+    assert len(delivered) == 1
+
+
 def test_latest_codex_cumulative_usage_is_preserved_in_terminal_task_state(
     workspace: Workspace,
 ) -> None:
