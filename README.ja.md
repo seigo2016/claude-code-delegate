@@ -128,6 +128,8 @@ patcher には \`requires_allowed_writes = true\`、auditor には \`forbids_all
 
 role が外部の書き込み root を許可し、packet に `allowed_writes` がある場合、worker は repository 内ではその repository-relative path だけ、外では宣言した root 配下だけに書き込めます。要求された検証を実行できない、または根拠を添えられない場合は、理由を `blockers` に書いて `unverified` を返し、collect はこれを `completed` と区別します。
 
+各 blocker は `{"reason", "text"}` です。`forbidden_by_packet`(packet が禁じた確認)、`environment`(tool・host・sandbox の失敗)、`not_done`(予定した作業や検証が未完)のいずれかを取り、旧 worker の文字列は `not_done` として扱います。`not_done` の blocker を持つ `completed` は完了とみなしません。読み取り専用の task は `unverified` で終わり、書き込み可能な task は `work_complete: false` と同じく `resume_limit` まで再開し、それでも残れば `failed` / `incomplete_work` になります。他の 2 つの reason は worker が報告した status を変えません。
+
 live な session state を必要とする作業や、事後承認では済まず人が下すべき判断には、Claude が `"host_only": true` を付けます。この場合 submit は送信せずに拒否します。packet に明示的に書く指定であり、内容を自動分類する機能ではありません。
 
 ## コマンド

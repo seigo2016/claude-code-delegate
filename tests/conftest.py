@@ -177,6 +177,11 @@ if mode in ("resume_success", "resume_limit", "resume_repeated"):
         good.update(status="unverified", work_complete=False,
                     blockers=["same" if mode == "resume_repeated" else f"blocker-{attempt}"])
 
+if mode == "scripted":
+    attempt = len(pathlib.Path(os.environ["FAKE_CALLS"]).read_text().splitlines()) - 1
+    script = json.loads(pathlib.Path(os.environ["FAKE_SCRIPT"]).read_text())
+    good.update(script[min(attempt, len(script) - 1)])
+
 event({"type": "item.completed",
        "item": {"id": "i-2", "type": "agent_message", "text": json.dumps(good)}})
 result_path.write_text(json.dumps(good))
@@ -235,6 +240,13 @@ class Workspace:
 
     def mode(self, value: str) -> None:
         self.mode_file.write_text(value, encoding="utf-8")
+
+    def script(self, *attempts: dict) -> None:
+        """Make the worker answer each attempt with these fields, the last one repeating."""
+        path = self.mode_file.parent / "script.json"
+        path.write_text(json.dumps(list(attempts)), encoding="utf-8")
+        self.env["FAKE_SCRIPT"] = str(path)
+        self.mode("scripted")
 
     def calls(self) -> list[list[str]]:
         if not self.calls_file.exists():

@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from delegate import envelope
 
 
@@ -31,7 +33,12 @@ def test_an_unverified_result_is_accepted_as_distinct_from_completed() -> None:
     unverified = {
         **valid(),
         "status": "unverified",
-        "blockers": ["pytest could not run because the dependency is unavailable"],
+        "blockers": [
+            {
+                "reason": "environment",
+                "text": "pytest could not run because the dependency is unavailable",
+            }
+        ],
     }
 
     assert envelope.violations(unverified) == []
@@ -185,7 +192,7 @@ def test_legacy_write_result_has_unknown_completion_and_blocker() -> None:
     result = envelope.sanitize(valid(), writes_allowed=True)
     assert result["work_complete"] is None
     assert result["status"] == "unverified"
-    assert "unknown" in result["blockers"][-1]
+    assert "unknown" in result["blockers"][-1]["text"]
     assert envelope.violations(result, writes_allowed=True) == []
 
 
@@ -193,3 +200,88 @@ def test_unknown_completion_cannot_be_reported_completed() -> None:
     result = envelope.sanitize({**valid(), "work_complete": None}, writes_allowed=True)
     assert result["status"] == "unverified"
     assert envelope.sanitize(result, writes_allowed=True) == result
+
+
+def blocker(reason: str, text: str = "x") -> dict[str, str]:
+    return {"reason": reason, "text": text}
+
+
+def test_legacy_string_blockers_become_not_done() -> None:
+    cleaned = envelope.sanitize({**valid(), "blockers": ["could not run pytest"]})
+    assert cleaned["blockers"] == [blocker("not_done", "could not run pytest")]
+    assert envelope.violations(cleaned) == []
+
+
+def test_an_unknown_or_missing_reason_is_not_done_never_more_lenient() -> None:
+    cleaned = envelope.sanitize(
+        {**valid(), "blockers": [{"reason": "whatever", "text": "a"}, {"text": "b"}]}
+    )
+    assert [b["reason"] for b in cleaned["blockers"]] == ["not_done", "not_done"]
+
+
+def test_known_reasons_are_kept() -> None:
+    blockers = [blocker(reason) for reason in envelope.BLOCKER_REASONS]
+    cleaned = envelope.sanitize({**valid(), "blockers": blockers})
+    assert sorted(cleaned["blockers"], key=str) == sorted(blockers, key=str)
+    assert envelope.violations(cleaned) == []
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "plain string",
+        {"reason": "nope", "text": "x"},
+        {"reason": "environment"},
+        {"reason": "environment", "text": 3},
+        {"reason": "environment", "text": "x", "extra": 1},
+    ],
+)
+def test_malformed_blockers_are_violations(bad: object) -> None:
+    assert envelope.violations({**valid(), "blockers": [bad]}) == [
+        "blockers must be an array of {reason, text} objects"
+    ]
+
+
+def test_chair_display_truncates_blocker_text_and_keeps_the_reason() -> None:
+    long = blocker("environment", "z" * 500)
+    shown = envelope.chair_display({**valid(), "blockers": [long]})["blockers"][0]
+    assert shown["reason"] == "environment"
+    assert len(shown["text"]) == envelope.MAX_ITEM_CHARS and shown["text"].endswith("...")
+
+
+def test_truncation_never_drops_a_not_done_blocker_behind_other_reasons() -> None:
+    blockers = [blocker("environment", str(i)) for i in range(7)] + [blocker("not_done", "last")]
+    cleaned = envelope.sanitize({**valid(), "blockers": blockers})
+    assert len(cleaned["blockers"]) == envelope.MAX_ITEMS
+    assert blocker("not_done", "last") in cleaned["blockers"]
+
+
+def test_schema_describes_blockers_as_reasoned_objects() -> None:
+    items = envelope.json_schema()["properties"]["blockers"]["items"]
+    assert items["additionalProperties"] is False
+    assert items["required"] == ["reason", "text"]
+    assert items["properties"]["reason"]["enum"] == list(envelope.BLOCKER_REASONS)
+
+
+@pytest.mark.parametrize(
+    ("status", "work_complete", "reasons", "incomplete"),
+    [
+        ("completed", True, ["not_done"], True),
+        ("completed", True, ["environment", "forbidden_by_packet"], False),
+        ("completed", True, [], False),
+        ("completed", False, [], True),
+        ("unverified", True, ["not_done"], False),
+        ("unverified", False, [], True),
+    ],
+)
+def test_incomplete_write_work_reads_not_done_blockers(
+    status: str, work_complete: bool, reasons: list[str], incomplete: bool
+) -> None:
+    result = {
+        **valid(),
+        "status": status,
+        "work_complete": work_complete,
+        "blockers": [blocker(reason) for reason in reasons],
+    }
+    assert envelope.incomplete_write_work(result, writes_allowed=True) is incomplete
+    assert envelope.incomplete_write_work(result, writes_allowed=False) is False

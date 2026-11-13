@@ -487,7 +487,7 @@ def test_resume_limit_stops_different_blockers(workspace: Workspace) -> None:
     assert state["failure_class"] == "incomplete_work"
     assert state["resume_count"] == 1
     assert len(workspace.calls()) == 2
-    assert state["resume_results"][0]["result"]["blockers"] == ["blocker-1"]
+    assert state["resume_results"][0]["result"]["blockers"] == [not_done("blocker-1")]
 
 
 def test_repeated_blockers_stop_before_limit(workspace: Workspace) -> None:
@@ -515,8 +515,8 @@ def test_default_resume_limit_allows_two_attempts(workspace: Workspace) -> None:
     assert state["failure_class"] == "incomplete_work"
     assert state["resume_count"] == 2
     assert [result["result"]["blockers"] for result in state["resume_results"]] == [
-        ["blocker-1"],
-        ["blocker-2"],
+        [not_done("blocker-1")],
+        [not_done("blocker-2")],
     ]
     assert len(workspace.calls()) == 3
 
@@ -538,3 +538,105 @@ def test_timeout_records_a_failure_message(workspace: Workspace) -> None:
     state = wait_for_terminal(workspace, handle["task_id"])
     assert state["failure_message"] == "tool_stall"
     assert workspace.run("collect", handle["task_id"])["failure_message"] == "tool_stall"
+
+
+def not_done(text: str) -> dict:
+    return {"reason": "not_done", "text": text}
+
+
+def write_packet() -> str:
+    return json.dumps({**json.loads(PACKET), "allowed_writes": ["allowed.txt"]})
+
+
+def test_write_task_completed_with_a_not_done_blocker_resumes_like_incomplete_work(
+    workspace: Workspace,
+) -> None:
+    workspace.script(
+        {"work_complete": True, "blockers": [not_done("tests not written")]},
+        {"work_complete": True, "blockers": []},
+    )
+    handle = workspace.submit(packet=write_packet(), role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["status"] == "completed"
+    assert state["resume_count"] == 1
+    assert state["resume_results"][0]["outcome"] == "completed"
+
+
+def test_write_task_with_not_done_blockers_that_never_clear_fails_at_the_resume_limit(
+    workspace: Workspace,
+) -> None:
+    workspace.settings.write_text(
+        workspace.settings.read_text().replace(
+            'adapter = "codex"', 'adapter = "codex"\nresume_limit = 1'
+        )
+    )
+    workspace.script(
+        {"work_complete": True, "blockers": [not_done("a")]},
+        {"work_complete": True, "blockers": [not_done("b")]},
+    )
+    handle = workspace.submit(packet=write_packet(), role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert (state["status"], state["failure_class"]) == ("failed", "incomplete_work")
+    assert state["resume_count"] == 1
+
+
+def test_write_task_with_identical_not_done_blockers_stops_resuming(
+    workspace: Workspace,
+) -> None:
+    workspace.script({"work_complete": True, "blockers": [not_done("same")]})
+    handle = workspace.submit(packet=write_packet(), role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["failure_class"] == "incomplete_work"
+    assert state["resume_count"] == 1
+    assert len(workspace.calls()) == 2
+
+
+def test_legacy_string_blockers_on_a_completed_write_task_count_as_not_done(
+    workspace: Workspace,
+) -> None:
+    workspace.script({"work_complete": True, "blockers": ["a legacy string"]})
+    handle = workspace.submit(packet=write_packet(), role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["failure_class"] == "incomplete_work"
+
+
+@pytest.mark.parametrize("reason", ["environment", "forbidden_by_packet"])
+def test_write_task_keeps_completed_when_blockers_are_not_unfinished_work(
+    workspace: Workspace, reason: str
+) -> None:
+    blockers = [{"reason": reason, "text": "could not run"}]
+    workspace.script({"work_complete": True, "blockers": blockers})
+    handle = workspace.submit(packet=write_packet(), role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["status"] == "completed"
+    assert state["resume_count"] == 0
+    assert workspace.run("collect", handle["task_id"])["result"]["blockers"] == blockers
+
+
+def test_read_only_task_completed_with_a_not_done_blocker_ends_unverified(
+    workspace: Workspace,
+) -> None:
+    workspace.script({"blockers": [not_done("did not check the third file")]})
+    handle = workspace.submit()
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["status"] == "unverified"
+    result = workspace.run("collect", handle["task_id"])["result"]
+    assert result["status"] == "unverified"
+    assert result["blockers"] == [not_done("did not check the third file")]
+
+
+def test_read_only_task_with_a_legacy_string_blocker_ends_unverified(
+    workspace: Workspace,
+) -> None:
+    workspace.script({"blockers": ["a legacy string"]})
+    handle = workspace.submit()
+    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "unverified"
+
+
+@pytest.mark.parametrize("reason", ["environment", "forbidden_by_packet"])
+def test_read_only_task_keeps_completed_when_blockers_are_not_unfinished_work(
+    workspace: Workspace, reason: str
+) -> None:
+    workspace.script({"blockers": [{"reason": reason, "text": "n/a"}]})
+    handle = workspace.submit()
+    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "completed"

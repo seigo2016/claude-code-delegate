@@ -191,6 +191,8 @@ whether they are true.
 
 When a role permits external write roots and the packet has `allowed_writes`, the worker may write only to those repository-relative paths inside the repository and only below the declared roots outside it. If requested verification cannot run or cannot be evidenced, the worker returns `unverified` with the reason in `blockers`; collection keeps it distinct from `completed`.
 
+Each blocker is `{"reason", "text"}`: `forbidden_by_packet` (a check the packet prohibited), `environment` (a tool, host or sandbox failure) or `not_done` (planned work or verification unfinished). A bare string from an older worker counts as `not_done`. A `completed` result carrying a `not_done` blocker is not completed: a read-only task ends `unverified`, and a write-capable task is treated like `work_complete: false` (resumed up to `resume_limit`, then `failed` / `incomplete_work`). The other two reasons leave the reported status alone.
+
 Claude marks a task `"host_only": true` when it needs live session state, or when
 the judgement is one a person must make rather than approve after the fact. Submit
 then fails closed instead of sending it. This is an explicit marker written into

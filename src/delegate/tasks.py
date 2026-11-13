@@ -28,7 +28,12 @@ _SHAPE = {
     "observed_facts": ["what you saw, each with the path it came from"],
     "verified_comparisons": ["what you checked against what, and the outcome"],
     "artifact_paths": ["paths a reader should open"],
-    "blockers": ["what stopped you, if anything"],
+    "blockers": [
+        {
+            "reason": "forbidden_by_packet | environment | not_done",
+            "text": "what stopped you",
+        }
+    ],
     "decision_needed": "the question only the caller can answer, or null",
     "report": "full report text or null",
     "counts": [{"name": "count name", "count": 0}],
@@ -197,6 +202,14 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
             "If you cannot run required verification or cannot supply its evidence, return "
             "unverified instead of completed and state what could not be verified in blockers."
         )
+    lines.append(
+        "Each blocker is an object with a reason and a text. The reason is "
+        "forbidden_by_packet when the packet itself prohibited the check, "
+        "environment when a tool, host or sandbox failure prevented it, and "
+        "not_done when planned work or verification is unfinished. "
+        "Use not_done only for work you did not finish: a completed result "
+        "that lists a not_done blocker is not accepted as completed."
+    )
     lines.append("")
     # Only one backend can be handed a schema, so the shape is stated here for
     # all of them. Without it a worker invents its own and the run is wasted.

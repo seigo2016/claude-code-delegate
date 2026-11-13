@@ -84,12 +84,11 @@ def _keep_last_message(
         "last_agent_message_path": str(message_path),
     }
     parsed = envelope.from_text(view.last_agent_message)
+    cleaned = envelope.sanitize(parsed, writes_allowed=writes_allowed)
     if (
         parsed is not None
-        and not envelope.violations(
-            envelope.sanitize(parsed, writes_allowed=writes_allowed), writes_allowed=writes_allowed
-        )
-        and not envelope.incomplete_write_work(parsed, writes_allowed=writes_allowed)
+        and not envelope.violations(cleaned, writes_allowed=writes_allowed)
+        and not envelope.incomplete_write_work(cleaned, writes_allowed=writes_allowed)
     ):
         recovered = task_dir / "recovered-result.json"
         raw_result = envelope.from_text(view.last_agent_message)
@@ -234,7 +233,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
         prompt_path = Path(state["prompt_path"])
         resume_count = 0
         resume_results: list[dict[str, Any]] = []
-        previous_blockers: list[str] | None = None
+        previous_blockers: list[tuple[str, str]] | None = None
         original_session_id: str | None = None
         # Each attempt appends to the task's streams; the deadline covers the whole task.
         while True:
@@ -338,7 +337,11 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                     exit_code=exit_code,
                 )
                 events.update(task_dir, resume_results=resume_results)
-            blockers = sorted(sanitized["blockers"]) if incomplete else None
+            blockers = (
+                sorted((item["reason"], item["text"]) for item in sanitized["blockers"])
+                if incomplete
+                else None
+            )
             repeated = previous_blockers is not None and blockers == previous_blockers
             if (
                 incomplete
@@ -366,9 +369,10 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                 )
                 prompt_path = task_dir / "resume-prompt.md"
                 prompt_path.write_text(
-                    "Continue implementing the unfinished work listed in the blockers of your "
-                    "previous answer until all implementation is complete. Return only when all "
-                    "is complete or a decision is needed. Create temporary files and directories "
+                    "Continue implementing the unfinished work listed in the blockers (reason "
+                    "not_done) of your previous answer until all implementation is complete. "
+                    "Return only when all is complete or a decision is needed. "
+                    "Create temporary files and directories "
                     "only under $TMPDIR; do not create new entries directly under "
                     "allowed_write_roots except packet-named outputs.\n",
                     encoding="utf-8",
@@ -444,7 +448,7 @@ def _salvaged_result(
         return None
     if envelope.incomplete_write_work(result, writes_allowed=writes_allowed):
         return None
-    return result
+    return envelope.settle(result, writes_allowed=writes_allowed)
 
 
 def _result_of(state: dict[str, Any], view: diagnose.RunView) -> tuple[dict[str, Any] | None, str]:
@@ -559,6 +563,7 @@ def _finish(
             **fields,
         )
         return
+    result = envelope.settle(result, writes_allowed=writes_allowed)
     _save_result(task_dir, Path(state["result_path"]), result)
     if envelope.incomplete_write_work(result, writes_allowed=writes_allowed):
         events.emit(
