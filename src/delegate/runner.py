@@ -11,6 +11,7 @@ import os
 import signal
 import subprocess
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -85,6 +86,15 @@ def worker_environment() -> dict[str, str]:
     }
 
 
+def _packet_forbidden(task_dir: Path) -> list[str]:
+    """The packet's own ``forbidden`` entries, which a blocker may cite by name."""
+    try:
+        value = store.read_json(task_dir / "packet.json").get("forbidden", [])
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
 def _keep_last_message(
     task_dir: Path, view: diagnose.RunView, *, writes_allowed: bool = False
 ) -> dict[str, Any]:
@@ -97,7 +107,8 @@ def _keep_last_message(
         "last_agent_message_path": str(message_path),
     }
     parsed = envelope.from_text(view.last_agent_message)
-    cleaned = envelope.sanitize(parsed, writes_allowed=writes_allowed)
+    forbidden = _packet_forbidden(task_dir)
+    cleaned = envelope.sanitize(parsed, writes_allowed=writes_allowed, forbidden=forbidden)
     if (
         parsed is not None
         and not envelope.violations(cleaned, writes_allowed=writes_allowed)
@@ -106,7 +117,7 @@ def _keep_last_message(
         recovered = task_dir / "recovered-result.json"
         raw_result = envelope.from_text(view.last_agent_message)
         sanitized = (
-            envelope.sanitize(raw_result, writes_allowed=writes_allowed)
+            envelope.sanitize(raw_result, writes_allowed=writes_allowed, forbidden=forbidden)
             if raw_result is not None
             else {}
         )
@@ -321,7 +332,11 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             fields.update(_write_scope(project_root, before, task_dir, view))
             result, _ = _result_of(state, view)
             sanitized = (
-                envelope.sanitize(result, writes_allowed=True) if result is not None else None
+                envelope.sanitize(
+                    result, writes_allowed=True, forbidden=_packet_forbidden(task_dir)
+                )
+                if result is not None
+                else None
             )
             valid = sanitized is not None and not envelope.violations(
                 sanitized, writes_allowed=True
@@ -445,7 +460,7 @@ def _absorb(
 
 
 def _salvaged_result(
-    view: diagnose.RunView, *, writes_allowed: bool = False
+    view: diagnose.RunView, *, writes_allowed: bool = False, forbidden: Sequence[str] = ()
 ) -> dict[str, Any] | None:
     """A result worth delivering despite the timeout, if the worker left one.
 
@@ -456,7 +471,7 @@ def _salvaged_result(
     parsed = envelope.from_text(view.last_agent_message or "")
     if parsed is None:
         return None
-    result = envelope.sanitize(parsed, writes_allowed=writes_allowed)
+    result = envelope.sanitize(parsed, writes_allowed=writes_allowed, forbidden=forbidden)
     if envelope.violations(result, writes_allowed=writes_allowed):
         return None
     if envelope.incomplete_write_work(result, writes_allowed=writes_allowed):
@@ -503,7 +518,9 @@ def _finish(
         events.emit(task_dir, "cancelled", terminal_reason="cancelled", **fields)
         return
     if timed_out:
-        salvaged = _salvaged_result(view, writes_allowed=writes_allowed)
+        salvaged = _salvaged_result(
+            view, writes_allowed=writes_allowed, forbidden=_packet_forbidden(task_dir)
+        )
         if salvaged is not None:
             _save_result(task_dir, Path(state["result_path"]), salvaged)
             events.emit(
@@ -561,7 +578,9 @@ def _finish(
             **fields,
         )
         return
-    result = envelope.sanitize(result, writes_allowed=writes_allowed)
+    result = envelope.sanitize(
+        result, writes_allowed=writes_allowed, forbidden=_packet_forbidden(task_dir)
+    )
     # So that a reader of the task finds the sanitized result in one place either way.
     problems = envelope.violations(result, writes_allowed=writes_allowed)
     if problems:
@@ -576,6 +595,7 @@ def _finish(
             **fields,
         )
         return
+    declared_complete = result["status"] == "completed"
     result = envelope.settle(result, writes_allowed=writes_allowed)
     _save_result(task_dir, Path(state["result_path"]), result)
     if envelope.incomplete_write_work(result, writes_allowed=writes_allowed):
@@ -590,4 +610,14 @@ def _finish(
     terminal = (
         result["status"] if result["status"] in {"decision_needed", "unverified"} else "completed"
     )
-    events.emit(task_dir, terminal, terminal_reason="normal_exit", **fields)
+    # An environment failure that turned completed into unverified is the cause
+    # a reader needs to see, and no resume could fix it.
+    blocked = declared_complete and terminal == "unverified" and envelope.has_environment_blocker(
+        result
+    )
+    events.emit(
+        task_dir,
+        terminal,
+        terminal_reason="environment_blocked" if blocked else "normal_exit",
+        **fields,
+    )

@@ -7,6 +7,7 @@ glance has moved the cost back into the session that delegated it.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 MAX_ITEMS = 5
@@ -27,8 +28,14 @@ OPTIONAL_FIELDS = ("report", "counts", "coverage")
 STATUSES = ("completed", "decision_needed", "unverified")
 
 
-def normalize_blocker(item: Any) -> Any:
+def normalize_blocker(item: Any, forbidden: Sequence[str] | None = None) -> Any:
     """A blocker as ``{reason, text}``; a bare string (legacy) is ``not_done``.
+
+    A worker declares its own reason, so ``forbidden_by_packet`` is believed only
+    when ``forbidden_item`` is exactly one of the packet's ``forbidden`` entries;
+    otherwise the blocker is ``not_done``. The field is optional; because a strict
+    output schema must list every property, ``null`` is accepted and dropped. ``forbidden=None`` skips that check, for
+    a result that was already normalised against its packet.
 
     Anything that is not a string or an object with a string ``text`` is returned
     unchanged so that ``violations`` reports it.
@@ -37,7 +44,17 @@ def normalize_blocker(item: Any) -> Any:
         return {"reason": UNFINISHED, "text": item}
     if isinstance(item, dict) and isinstance(item.get("text"), str):
         reason = item.get("reason")
-        return {"reason": reason if reason in BLOCKER_REASONS else UNFINISHED, "text": item["text"]}
+        if reason not in BLOCKER_REASONS:
+            reason = UNFINISHED
+        declared = item.get("forbidden_item")
+        if reason == "forbidden_by_packet" and (
+            not isinstance(declared, str) or (forbidden is not None and declared not in forbidden)
+        ):
+            reason = UNFINISHED
+        normalized = {"reason": reason, "text": item["text"]}
+        if reason == "forbidden_by_packet":
+            normalized["forbidden_item"] = declared
+        return normalized
     return item
 
 
@@ -50,21 +67,34 @@ def has_unfinished_blocker(result: dict[str, Any]) -> bool:
     return isinstance(blockers, list) and any(_is_unfinished(item) for item in blockers)
 
 
-def settle(result: dict[str, Any], *, writes_allowed: bool) -> dict[str, Any]:
-    """A read-only result that reports unfinished work is ``unverified``, not ``completed``.
+def has_environment_blocker(result: dict[str, Any]) -> bool:
+    blockers = result.get("blockers")
+    return isinstance(blockers, list) and any(
+        isinstance(item, dict) and item.get("reason") == "environment" for item in blockers
+    )
 
-    Write-capable results are handled by ``incomplete_write_work`` instead.
+
+def settle(result: dict[str, Any], *, writes_allowed: bool) -> dict[str, Any]:
+    """A ``completed`` result that admits it could not verify is ``unverified``.
+
+    That is unfinished work (read-only roles) or an environment failure (any
+    role: resuming in the same environment would fail again). Unfinished work in
+    a write-capable result is ``incomplete_write_work``'s to handle, so it is left
+    alone here. A valid ``forbidden_by_packet`` blocker changes nothing.
     """
-    if (
-        not writes_allowed
-        and result.get("status") == "completed"
-        and has_unfinished_blocker(result)
+    if result.get("status") != "completed":
+        return result
+    unfinished = has_unfinished_blocker(result)
+    if (unfinished and not writes_allowed) or (
+        has_environment_blocker(result) and not (writes_allowed and unfinished)
     ):
         return {**result, "status": "unverified"}
     return result
 
 
-def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
+def sanitize(
+    result: Any, *, writes_allowed: bool = False, forbidden: Sequence[str] = ()
+) -> Any:
     """Coerce a near-valid envelope into shape where possible.
 
     Workers (especially external models) often produce envelopes that are
@@ -73,6 +103,7 @@ def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
     - Evidence lists exceeding MAX_ITEMS (truncated to MAX_ITEMS)
     - Extraneous metadata keys (e.g. toolAction, toolSummary, reasoning)
     - Missing 'decision_needed' or 'blockers' when status is 'completed'
+    - Blocker reasons the packet does not back (see ``normalize_blocker``)
     """
     if not isinstance(result, dict):
         return result
@@ -87,6 +118,8 @@ def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
     for field in EVIDENCE_FIELDS:
         if field in result:
             cleaned[field] = result[field]
+            if field == "blockers" and isinstance(cleaned[field], list):
+                cleaned[field] = [normalize_blocker(item, forbidden) for item in cleaned[field]]
         elif field == "blockers" and result.get("status") == "completed":
             cleaned["blockers"] = []
     cleaned = chair_display(cleaned)
@@ -189,9 +222,10 @@ def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
         if field == "blockers":
             well_formed = isinstance(value, list) and all(
                 isinstance(item, dict)
-                and set(item) == {"reason", "text"}
+                and set(item) in ({"reason", "text"}, {"reason", "text", "forbidden_item"})
                 and item["reason"] in BLOCKER_REASONS
                 and isinstance(item["text"], str)
+                and isinstance(item.get("forbidden_item", ""), str)
                 for item in value
             )
             if not well_formed:
@@ -318,10 +352,11 @@ def json_schema(*, writes_allowed: bool = False) -> dict[str, Any]:
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["reason", "text"],
+                    "required": ["reason", "text", "forbidden_item"],
                     "properties": {
                         "reason": {"type": "string", "enum": list(BLOCKER_REASONS)},
                         "text": {"type": "string", "maxLength": 4000},
+                        "forbidden_item": {"type": ["string", "null"], "maxLength": 4000},
                     },
                 },
             },

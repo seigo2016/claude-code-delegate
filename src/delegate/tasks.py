@@ -32,6 +32,7 @@ _SHAPE = {
         {
             "reason": "forbidden_by_packet | environment | not_done",
             "text": "what stopped you",
+            "forbidden_item": "the exact forbidden entry for forbidden_by_packet, else null",
         }
     ],
     "decision_needed": "the question only the caller can answer, or null",
@@ -207,11 +208,12 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         )
     lines.append(
         "Each blocker is an object with a reason and a text. The reason is "
-        "forbidden_by_packet when the packet itself prohibited the check, "
-        "environment when a tool, host or sandbox failure prevented it, and "
-        "not_done when planned work or verification is unfinished. "
-        "Use not_done only for work you did not finish: a completed result "
-        "that lists a not_done blocker is not accepted as completed."
+        "environment when a tool, host or sandbox failure prevented the work or check, "
+        "not_done when planned work or verification is unfinished, and "
+        "forbidden_by_packet when the packet itself prohibited a check. "
+        "A forbidden_by_packet blocker must also carry forbidden_item, set to the exact "
+        "string of the entry in the packet's forbidden list that prohibited the check; "
+        "without an exact match it is treated as not_done. Otherwise forbidden_item is null."
     )
     lines.append("")
     # Only one backend can be handed a schema, so the shape is stated here for

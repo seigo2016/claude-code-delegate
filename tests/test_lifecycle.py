@@ -600,16 +600,51 @@ def test_legacy_string_blockers_on_a_completed_write_task_count_as_not_done(
     assert state["failure_class"] == "incomplete_work"
 
 
-@pytest.mark.parametrize("reason", ["environment", "forbidden_by_packet"])
-def test_write_task_keeps_completed_when_blockers_are_not_unfinished_work(
-    workspace: Workspace, reason: str
+def forbidden_packet(base: str) -> str:
+    return json.dumps({**json.loads(base), "forbidden": ["running the network check"]})
+
+
+def forbidden_blocker(item: str | None) -> dict:
+    blocker = {"reason": "forbidden_by_packet", "text": "check prohibited"}
+    return {**blocker, "forbidden_item": item} if item is not None else blocker
+
+
+def test_write_task_keeps_completed_with_a_matching_forbidden_by_packet(
+    workspace: Workspace,
 ) -> None:
-    blockers = [{"reason": reason, "text": "could not run"}]
+    blockers = [forbidden_blocker("running the network check")]
     workspace.script({"work_complete": True, "blockers": blockers})
-    handle = workspace.submit(packet=write_packet(), role="bounded-implementer")
+    handle = workspace.submit(packet=forbidden_packet(write_packet()), role="bounded-implementer")
     state = wait_for_terminal(workspace, handle["task_id"])
     assert state["status"] == "completed"
     assert state["resume_count"] == 0
+    assert workspace.run("collect", handle["task_id"])["result"]["blockers"] == blockers
+
+
+@pytest.mark.parametrize("item", [None, "something else"])
+def test_write_task_treats_an_unmatched_forbidden_by_packet_as_not_done(
+    workspace: Workspace, item: str | None
+) -> None:
+    workspace.script({"work_complete": True, "blockers": [forbidden_blocker(item)]})
+    handle = workspace.submit(packet=forbidden_packet(write_packet()), role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["failure_class"] == "incomplete_work"
+    assert state["resume_results"][0]["result"]["blockers"] == [
+        not_done("check prohibited")
+    ]
+
+
+def test_write_task_with_an_environment_blocker_ends_unverified_without_resuming(
+    workspace: Workspace,
+) -> None:
+    blockers = [{"reason": "environment", "text": "sandbox denied"}]
+    workspace.script({"work_complete": True, "blockers": blockers})
+    handle = workspace.submit(packet=write_packet(), role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["status"] == "unverified"
+    assert state["terminal_reason"] == "environment_blocked"
+    assert state["resume_count"] == 0
+    assert len(workspace.calls()) == 1
     assert workspace.run("collect", handle["task_id"])["result"]["blockers"] == blockers
 
 
@@ -633,13 +668,30 @@ def test_read_only_task_with_a_legacy_string_blocker_ends_unverified(
     assert wait_for_terminal(workspace, handle["task_id"])["status"] == "unverified"
 
 
-@pytest.mark.parametrize("reason", ["environment", "forbidden_by_packet"])
-def test_read_only_task_keeps_completed_when_blockers_are_not_unfinished_work(
-    workspace: Workspace, reason: str
+def test_read_only_task_with_an_environment_blocker_ends_unverified(
+    workspace: Workspace,
 ) -> None:
-    workspace.script({"blockers": [{"reason": reason, "text": "n/a"}]})
+    workspace.script({"blockers": [{"reason": "environment", "text": "n/a"}]})
     handle = workspace.submit()
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert (state["status"], state["terminal_reason"]) == ("unverified", "environment_blocked")
+
+
+def test_read_only_task_keeps_completed_with_a_matching_forbidden_by_packet(
+    workspace: Workspace,
+) -> None:
+    workspace.script({"blockers": [forbidden_blocker("running the network check")]})
+    handle = workspace.submit(packet=forbidden_packet(PACKET))
     assert wait_for_terminal(workspace, handle["task_id"])["status"] == "completed"
+
+
+@pytest.mark.parametrize("item", [None, "something else"])
+def test_read_only_task_treats_an_unmatched_forbidden_by_packet_as_not_done(
+    workspace: Workspace, item: str | None
+) -> None:
+    workspace.script({"blockers": [forbidden_blocker(item)]})
+    handle = workspace.submit(packet=forbidden_packet(PACKET))
+    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "unverified"
 
 
 @pytest.mark.parametrize("bad", [{"type": "x", "message": "y"}, {"text": 5}, 5])
@@ -653,3 +705,4 @@ def test_a_malformed_blocker_ends_invalid_result_not_supervisor_error(
     state = wait_for_terminal(workspace, handle["task_id"])
     assert state["terminal_reason"] == "invalid_result"
     assert state["result_problems"]
+
