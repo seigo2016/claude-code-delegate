@@ -329,7 +329,6 @@ def _session_watch_files(session_id: str) -> list[tuple[Path, list[Path]]]:
             value = store.read_json(path)
             entries = value["watch_tasks"]
         except (KeyError, OSError, ValueError, json.JSONDecodeError):
-            path.unlink(missing_ok=True)
             continue
         if value.get("session_id") == session_id and isinstance(entries, list):
             found.append((path, [d for d in map(tasks.entry_dir, entries) if d is not None]))

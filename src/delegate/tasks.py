@@ -190,7 +190,8 @@ def pending_completion_watches(session_id: str | None = None) -> list[Path]:
                 continue
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        if path.parent == legacy_root:
+        if path != _pending_path(session_id, task_dir):
+            # Written by an older version, which named it differently.
             register_completion_watch(task_dir, session_id)
             path.unlink(missing_ok=True)
         found.append(task_dir)

@@ -608,6 +608,11 @@ def test_legacy_pending_watch_migrates_only_for_owner(
     assert legacy.exists() and not pending.exists()
     assert tasks.pending_completion_watches("owner") == [Path(handle["task_dir"])]
     assert pending.exists() and not legacy.exists()
+    # A file an older version named differently is renamed too, so it is cleared later.
+    older = pending.with_name("older-name.json")
+    pending.rename(older)
+    assert tasks.pending_completion_watches("owner") == [Path(handle["task_dir"])]
+    assert pending.exists() and not older.exists()
     owner = hook_watch(workspace, "hidden", cwd=tmp_path, session_id="owner", seconds="0")
     assert owner.returncode == WAKE
     assert json.loads(owner.stdout)["ready"][0]["task_id"] == handle["task_id"]
