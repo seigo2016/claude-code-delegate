@@ -394,6 +394,13 @@ def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str,
     root = explicit_root(Path(state["project_root"]), state.get("task_root"))
     if root is not None:
         handle["task_root"] = str(root)
+    # A comparison that could not use the arm it chose says so where the caller looks.
+    if state.get("route_fallback_from"):
+        handle["route_fallback"] = {
+            "from": state["route_fallback_from"],
+            "to": state["worker"],
+            "reason": state.get("route_fallback_reason"),
+        }
     return handle
 
 
@@ -498,27 +505,59 @@ def _all_states(root: Path) -> list[dict[str, Any]]:
     return found
 
 
-def _healthy_arm(
-    settings: config.Settings, role: str, current: str, fast: bool | None, root: Path
-) -> tuple[config.Plan, str] | None:
-    """The other arm of a comparing role, when it is usable and not itself broken.
-
-    The caller only asks when the alternation chose the arm: a named worker stays named.
-    """
+def _candidates(
+    settings: config.Settings, role: str, chosen: str | None, route_policy: str | None
+) -> list[str | None]:
+    """The workers to try, in order: the one chosen, then (when comparing) the other arms."""
     role_def = settings.roles.get(role)
-    if role_def is None or not role_def.compare_workers or current not in role_def.compare_workers:
-        return None
+    if route_policy != "compare" or role_def is None or chosen not in role_def.compare_workers:
+        return [chosen]
     arms = role_def.compare_workers
-    start = arms.index(current)
-    for step in range(1, len(arms)):
-        other = arms[(start + step) % len(arms)]
-        if recent_unhealthy(root, other) is not None:
-            continue
+    start = arms.index(str(chosen))
+    return [arms[(start + step) % len(arms)] for step in range(len(arms))]
+
+
+def _try_worker(
+    settings: config.Settings,
+    role: str,
+    worker: str | None,
+    fast: bool | None,
+    ledger_root: Path,
+    *,
+    allow_unhealthy: bool,
+    preflight: bool,
+) -> tuple[config.Plan, dict[str, Any] | None]:
+    """The plan for one worker and any health override, or why it cannot run."""
+    plan = settings.plan(role, worker=worker, fast=fast)
+    override: dict[str, Any] | None = None
+    unhealthy = recent_unhealthy(ledger_root, plan.worker)
+    if unhealthy is not None and allow_unhealthy:
+        override = {"failure_class": unhealthy[0], "task_ids": unhealthy[1]}
+    elif unhealthy is not None:
+        raise WorkerUnhealthy(
+            "worker_unhealthy",
+            worker=plan.worker,
+            failure_class=unhealthy[0],
+            task_ids=unhealthy[1],
+            reason=(
+                f"the last {UNHEALTHY_STREAK} tasks of {plan.worker} all failed with "
+                f"{unhealthy[0]}; fix the worker, or pass --allow-unhealthy to retry"
+            ),
+        )
+    if preflight:
         try:
-            return settings.plan(role, worker=other, fast=fast), other
-        except config.ConfigError:
-            continue
-    return None
+            adapter = registry.get(plan.adapter)
+        except KeyError as error:
+            raise SubmitRefused(str(error)) from error
+        _preflight(plan, adapter.name)
+    return plan, override
+
+
+def _reason(error: Exception) -> str:
+    detail = getattr(error, "detail", None)
+    if isinstance(detail, dict) and isinstance(detail.get("reason"), str):
+        return str(detail["reason"])
+    return str(error)
 
 
 def submit(
@@ -542,31 +581,40 @@ def submit(
 
     ledger_root = ledger if ledger is not None else task_root(project_root)
     chosen, route_arm, route_policy = _route(settings, role, worker, ledger_root)
-    plan = settings.plan(role, worker=chosen, fast=fast)
-    fallback_from: str | None = None
+    candidates = _candidates(settings, role, chosen, route_policy)
+    failures: list[tuple[str | None, Exception]] = []
+    plan: config.Plan | None = None
     override: dict[str, Any] | None = None
-    unhealthy = recent_unhealthy(ledger_root, plan.worker)
-    if unhealthy is not None and allow_unhealthy:
-        override = {"failure_class": unhealthy[0], "task_ids": unhealthy[1]}
-    elif unhealthy is not None:
-        plan_and_arm = (
-            _healthy_arm(settings, role, plan.worker, fast, ledger_root)
-            if route_policy == "compare"
-            else None
-        )
-        if plan_and_arm is None:
-            raise WorkerUnhealthy(
-                "worker_unhealthy",
-                worker=plan.worker,
-                failure_class=unhealthy[0],
-                task_ids=unhealthy[1],
-                reason=(
-                    f"the last {UNHEALTHY_STREAK} tasks of {plan.worker} all failed with "
-                    f"{unhealthy[0]}; fix the worker, or pass --allow-unhealthy to retry"
-                ),
+    for candidate in candidates:
+        try:
+            # With several arms to choose from, an arm that could not be started
+            # is skipped; with one, the checks below say what is wrong as before.
+            plan, override = _try_worker(
+                settings,
+                role,
+                candidate,
+                fast,
+                ledger_root,
+                allow_unhealthy=allow_unhealthy,
+                preflight=len(candidates) > 1,
             )
-        fallback_from = plan.worker
-        plan, route_arm = plan_and_arm
+        except (SubmitRefused, config.ConfigError) as error:
+            failures.append((candidate, error))
+            continue
+        break
+    if plan is None:
+        first = failures[0][1]
+        if isinstance(first, SubmitRefused) and len(failures) > 1:
+            first.detail["other_arms"] = [
+                {"worker": name, "reason": _reason(error)} for name, error in failures[1:]
+            ]
+        raise first
+    fallback_from: str | None = None
+    fallback_reason: str | None = None
+    if failures:
+        fallback_from = str(failures[0][0])
+        fallback_reason = _reason(failures[0][1])
+        route_arm = plan.worker
     escalation_reason = value.get("escalation_reason")
     if plan.role.allowed_escalation_reasons:
         if escalation_reason is None:
@@ -654,6 +702,7 @@ def submit(
         "route_arm": route_arm,
         "route_policy": route_policy,
         "route_fallback_from": fallback_from,
+        "route_fallback_reason": fallback_reason,
         "unhealthy_override": override,
         "adapter": plan.adapter,
         "model": plan.model,

@@ -204,7 +204,9 @@ def _string_values(body: dict[str, Any], key: str, where: str) -> tuple[str, ...
     return tuple(values)
 
 
-def _compare_workers(body: dict[str, Any], where: str, known: set[str]) -> tuple[str, ...]:
+def _compare_workers(
+    body: dict[str, Any], where: str, known: set[str], enabled: set[str]
+) -> tuple[str, ...]:
     if "compare_workers" not in body:
         return ()
     values = body["compare_workers"]
@@ -222,6 +224,12 @@ def _compare_workers(body: dict[str, Any], where: str, known: set[str]) -> tuple
         raise ConfigError(
             f"{key} names unknown workers: {', '.join(unknown)} "
             f"(configured workers: {', '.join(sorted(known)) or 'none configured'})"
+        )
+    disabled = [value for value in values if value not in enabled]
+    if disabled:
+        raise ConfigError(
+            f"{key} names workers that are not enabled: {', '.join(disabled)} "
+            "(set enabled = true, or leave them out)"
         )
     return tuple(values)
 
@@ -285,7 +293,16 @@ def parse(data: bytes, path: Path) -> Settings:
             requires_explicit_user_direction=_optional_bool(
                 body, "requires_explicit_user_direction", where
             ),
-            compare_workers=_compare_workers(body, where, set(raw.get("workers", {}))),
+            compare_workers=_compare_workers(
+                body,
+                where,
+                set(raw.get("workers", {})),
+                {
+                    name
+                    for name, worker in raw.get("workers", {}).items()
+                    if isinstance(worker, dict) and bool(worker.get("enabled", False))
+                },
+            ),
         )
     workers = {
         name: Worker(

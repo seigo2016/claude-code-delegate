@@ -100,3 +100,59 @@ def test_a_bad_compare_workers_is_reported_by_submit(compare: Workspace) -> None
     out = compare.submit(role="ab")
 
     assert "compare_workers" in out["error"]
+
+
+def test_a_disabled_arm_is_rejected_when_the_config_loads() -> None:
+    body = COMPARE.replace("enabled = true", "enabled = false")
+    with pytest.raises(config.ConfigError, match="not enabled: opencode"):
+        config.parse((SETTINGS + body).encode(), Path("delegate.toml"))
+
+
+def drop_opencode(workspace: Workspace) -> None:
+    """Leave only the codex stand-in on PATH, as if opencode were not installed."""
+    (workspace.worker_path.parent / "opencode").unlink()
+    workspace.env["PATH"] = str(workspace.worker_path.parent)
+
+
+def test_an_arm_whose_binary_is_missing_falls_back_to_the_other_and_says_so(
+    compare: Workspace,
+) -> None:
+    drop_opencode(compare)
+    first = compare.submit(role="ab", title="t0", expect_success=True)
+    second = compare.submit(role="ab", title="t1", expect_success=True)
+
+    assert "route_fallback" not in first
+    assert second["worker"] == "codex"
+    assert second["route_fallback"]["from"] == "opencode"
+    assert second["route_fallback"]["to"] == "codex"
+    assert "opencode" in second["route_fallback"]["reason"]
+    state = state_of(compare, second)
+    assert (state["route_arm"], state["route_fallback_from"]) == ("codex", "opencode")
+    assert "opencode" in state["route_fallback_reason"]
+
+
+def test_an_arm_that_cannot_be_planned_falls_back_to_the_other(compare: Workspace) -> None:
+    compare.settings.write_text(
+        (SETTINGS + COMPARE).replace(
+            'standard = { model = "sonnet", effort = "high" }',
+            'light = { model = "sonnet", effort = "high" }',
+        ),
+        encoding="utf-8",
+    )
+    compare.submit(role="ab", title="t0", expect_success=True)
+    second = compare.submit(role="ab", title="t1", expect_success=True)
+
+    assert second["worker"] == "codex"
+    assert second["route_fallback"]["from"] == "opencode"
+    assert "standard" in second["route_fallback"]["reason"]
+
+
+def test_a_role_with_no_runnable_arm_is_refused(compare: Workspace) -> None:
+    compare.remove_worker()
+    (compare.worker_path.parent / "opencode").unlink()
+
+    out = compare.submit(role="ab")
+
+    assert "task_id" not in out
+    assert "worker binary not on PATH: codex" in out["error"]
+    assert out["other_arms"][0]["worker"] == "opencode"

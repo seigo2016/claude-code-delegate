@@ -79,7 +79,7 @@ role asking for a level the chosen worker does not define is refused before
 anything starts.
 
 To compare two workers on one role, give it `compare_workers = ["codex",
-"claude"]` (two or more distinct configured worker names, checked when the
+"claude"]` (two or more distinct names of enabled workers, checked when the
 settings load). Without `--worker`, successive submits take the names in turn:
 the arm is `compare_workers[n % len]`, where `n` counts the role's tasks already
 in the task root that have a `route_arm`. The choice is recorded in `state.json`
@@ -87,6 +87,11 @@ as `route_arm` (the worker name) and `route_policy = "compare"`. It replaces
 `preferred_worker` for that role; `--worker` still wins and records
 `route_policy = "explicit"` with no `route_arm`, so it does not move the
 alternation. Identical in-flight requests are deduplicated only within one arm.
+If the arm the alternation chose cannot run (it cannot be planned, or its binary is
+missing or another submit-time check fails), the submit moves to the next arm
+instead, records `route_fallback_from` and `route_fallback_reason`, and its handle
+carries `route_fallback` (`from`, `to`, `reason`). The submit is refused only when
+no arm can run, with the first arm's error and the others' under `other_arms`.
 
 An optional top-level `[common]` table with `instructions = """..."""` holds text
 that goes into every task's prompt, once, under "Instructions common to all roles"
