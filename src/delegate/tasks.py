@@ -208,6 +208,9 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     if own_forbidden:
         lines.append("The packet's forbidden list (do not):")
         lines.extend(f"- {item}" for item in own_forbidden)
+    if plan.common_instructions:
+        lines.append("Instructions common to all roles:")
+        lines.append(plan.common_instructions.strip())
     if plan.role.instructions:
         lines.append("Role instructions:")
         lines.append(plan.role.instructions.strip())

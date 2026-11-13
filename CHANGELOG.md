@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add an optional `[common] instructions` table to the settings: its text is placed once in every task's prompt, before the role's own instructions.
 - Add `submit --config <path>` and `--task-root <path>` (also on `status`, `collect`, `cancel`, `reconcile`, `watch`) to read settings from, and keep task records in, a place other than the project root; the worker still runs in the project root. `state.json` records `config_path`, `config_sha256` and `task_root`. Handles, the session watch registry and `watch-group.json` carry `task_root` when it is not the default, and entries without it still mean the default.
 
 - Manual `reconcile` and `watch` no longer offer bridge-owned tasks to a session caller; `--owner <id>` shows only that owner's bridge tasks.

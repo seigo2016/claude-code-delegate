@@ -70,6 +70,7 @@ class Plan:
     denied_read_paths: tuple[str, ...] = ()
     isolate_home: bool = True
     resume_limit: int = 2
+    common_instructions: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ class Settings:
     default_worker: str | None
     denied_read_paths: tuple[str, ...] = ()
     temp_root: str | None = None
+    common_instructions: str | None = None
 
     def plan(self, role_name: str, *, worker: str | None = None, fast: bool | None = None) -> Plan:
         role = self.roles.get(role_name)
@@ -110,6 +112,7 @@ class Settings:
             denied_read_paths=self.denied_read_paths,
             isolate_home=chosen.isolate_home,
             resume_limit=chosen.resume_limit,
+            common_instructions=self.common_instructions,
         )
 
     def _choose_worker(self, requested: str | None, preferred: str | None) -> Worker:
@@ -206,6 +209,15 @@ def _optional_bool(body: dict[str, Any], key: str, where: str, *, default: bool 
     return value
 
 
+def _common_instructions(raw: dict[str, Any]) -> str | None:
+    if "common" not in raw:
+        return None
+    body = raw["common"]
+    if not isinstance(body, dict):
+        raise ConfigError("common must be a table")
+    return _optional_nonempty_string(body, "instructions", "common")
+
+
 def _resume_limit(body: dict[str, Any], where: str) -> int:
     value = body.get("resume_limit", 2)
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -281,4 +293,5 @@ def parse(data: bytes, path: Path) -> Settings:
         default_worker=str(default_worker) if default_worker is not None else None,
         denied_read_paths=_denied_read_paths(raw),
         temp_root=temp_root,
+        common_instructions=_common_instructions(raw),
     )

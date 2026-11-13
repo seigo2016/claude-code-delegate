@@ -78,6 +78,10 @@ in order: `--worker`, the role's `preferred_worker`, then `default_worker`. A
 role asking for a level the chosen worker does not define is refused before
 anything starts.
 
+An optional top-level `[common]` table with `instructions = """..."""` holds text
+that goes into every task's prompt, once, under "Instructions common to all roles"
+and before the role's own `instructions`.
+
 A role may limit escalation with `allowed_escalation_reasons`. When it does,
 the packet must give an `escalation_reason` from that list. A role with
 `requires_explicit_user_direction = true` also requires
