@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -47,9 +48,79 @@ FORBIDDEN = envelope.BUILT_IN_FORBIDDEN
 class SubmitRefused(Exception):
     """The request will not start a worker, and why."""
 
+    exit_code = 1
+
     def __init__(self, message: str, **detail: Any) -> None:
         super().__init__(message)
         self.detail = detail
+
+
+class WorkerUnhealthy(SubmitRefused):
+    """The worker's last runs all failed for a reason that lies with the worker."""
+
+    exit_code = 7
+
+
+#: How many consecutive same-class failures make a worker unhealthy.
+UNHEALTHY_STREAK = 3
+#: ``failure_class`` values naming a credential the worker cannot use. ``auth_failed``
+#: is what the adapters produce (a 401/403, an authentication error type, or an
+#: ``api_key``/``auth`` code); the others are the names a hand-written or future
+#: adapter would likely give the same thing.
+AUTH_CLASSES = frozenset({"auth_failed", "auth_error", "api_key_expired"})
+#: ``terminal_reason`` values that mean the worker could not be run at all. Their
+#: ``failure_class`` is an exception name that varies, so the reason is what is compared.
+BROKEN_REASONS = frozenset({"launch_error", "supervisor_error"})
+
+
+def worker_fault(state: dict[str, Any]) -> str | None:
+    """The class of a failure that says the worker is broken, not the task.
+
+    Left out on purpose, because a retry can well succeed or the task is at fault:
+    ``worker_api_error`` (any other provider error, including a bad request),
+    ``provider_capacity`` and the timeout classes (transient), and ``nonzero_exit``,
+    ``empty_result``, ``invalid_result``, ``incomplete_work`` and
+    ``write_scope_violation`` (what this task did, not whether the worker starts).
+    """
+    if state.get("status") != "failed":
+        return None
+    reason = state.get("terminal_reason")
+    if reason in BROKEN_REASONS:
+        return str(reason)
+    failure_class = state.get("failure_class")
+    if failure_class in AUTH_CLASSES:
+        return str(failure_class)
+    return None
+
+
+def _terminal_key(state: dict[str, Any]) -> tuple[datetime, str]:
+    return (datetime.fromisoformat(str(state["terminal_at"])), str(state.get("task_id")))
+
+
+def recent_unhealthy(root: Path, worker: str) -> tuple[str, list[str]] | None:
+    """``(class, task ids)`` when the worker's last three terminal tasks all failed alike.
+
+    Newest first. A task of another outcome in between, or fewer than three tasks,
+    means the worker is not known to be broken.
+    """
+    if not root.exists():
+        return None
+    finished = []
+    for state in _all_states(root):
+        if state.get("worker") != worker or state.get("status") not in events.TERMINAL_STATES:
+            continue
+        try:
+            finished.append((_terminal_key(state), state))
+        except (KeyError, ValueError):
+            continue
+    finished.sort(key=lambda item: item[0], reverse=True)
+    latest = [state for _, state in finished[:UNHEALTHY_STREAK]]
+    if len(latest) < UNHEALTHY_STREAK:
+        return None
+    classes = {worker_fault(state) for state in latest}
+    if len(classes) != 1 or None in classes:
+        return None
+    return str(classes.pop()), [str(state["task_id"]) for state in latest]
 
 
 def settings_path(project_root: Path) -> Path:
@@ -427,6 +498,29 @@ def _all_states(root: Path) -> list[dict[str, Any]]:
     return found
 
 
+def _healthy_arm(
+    settings: config.Settings, role: str, current: str, fast: bool | None, root: Path
+) -> tuple[config.Plan, str] | None:
+    """The other arm of a comparing role, when it is usable and not itself broken.
+
+    The caller only asks when the alternation chose the arm: a named worker stays named.
+    """
+    role_def = settings.roles.get(role)
+    if role_def is None or not role_def.compare_workers or current not in role_def.compare_workers:
+        return None
+    arms = role_def.compare_workers
+    start = arms.index(current)
+    for step in range(1, len(arms)):
+        other = arms[(start + step) % len(arms)]
+        if recent_unhealthy(root, other) is not None:
+            continue
+        try:
+            return settings.plan(role, worker=other, fast=fast), other
+        except config.ConfigError:
+            continue
+    return None
+
+
 def submit(
     *,
     project_root: Path,
@@ -440,6 +534,7 @@ def submit(
     config_path: Path | None = None,
     config_sha256: str | None = None,
     ledger: Path | None = None,
+    allow_unhealthy: bool = False,
 ) -> dict[str, Any]:
     packet_module.validate(value)
     if value["host_only"]:
@@ -448,6 +543,30 @@ def submit(
     ledger_root = ledger if ledger is not None else task_root(project_root)
     chosen, route_arm, route_policy = _route(settings, role, worker, ledger_root)
     plan = settings.plan(role, worker=chosen, fast=fast)
+    fallback_from: str | None = None
+    override: dict[str, Any] | None = None
+    unhealthy = recent_unhealthy(ledger_root, plan.worker)
+    if unhealthy is not None and allow_unhealthy:
+        override = {"failure_class": unhealthy[0], "task_ids": unhealthy[1]}
+    elif unhealthy is not None:
+        plan_and_arm = (
+            _healthy_arm(settings, role, plan.worker, fast, ledger_root)
+            if route_policy == "compare"
+            else None
+        )
+        if plan_and_arm is None:
+            raise WorkerUnhealthy(
+                "worker_unhealthy",
+                worker=plan.worker,
+                failure_class=unhealthy[0],
+                task_ids=unhealthy[1],
+                reason=(
+                    f"the last {UNHEALTHY_STREAK} tasks of {plan.worker} all failed with "
+                    f"{unhealthy[0]}; fix the worker, or pass --allow-unhealthy to retry"
+                ),
+            )
+        fallback_from = plan.worker
+        plan, route_arm = plan_and_arm
     escalation_reason = value.get("escalation_reason")
     if plan.role.allowed_escalation_reasons:
         if escalation_reason is None:
@@ -534,6 +653,8 @@ def submit(
         "worker": plan.worker,
         "route_arm": route_arm,
         "route_policy": route_policy,
+        "route_fallback_from": fallback_from,
+        "unhealthy_override": override,
         "adapter": plan.adapter,
         "model": plan.model,
         "effort": plan.effort,

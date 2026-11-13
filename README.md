@@ -242,6 +242,26 @@ repository instructions say, and `delegate submit` called with `DELEGATE_WORKER`
 set is refused with `nested_submit` (exit 6). Exit codes: 1 error, 2 `WAKE`, 3
 `already_delivered`, 4 `task_not_terminal`, 5 `owner_mismatch`, 6 `nested_submit`.
 
+A worker that is itself broken is not sent more work. At submit, after the worker
+is chosen, the three most recent terminal tasks of that worker in the task root
+(by `terminal_at`) are looked at; when all three ended `failed` with the same
+worker-fault class, submit is refused with `worker_unhealthy` (exit 7) naming the
+worker, the class and the three task ids. The worker-fault classes are
+`auth_failed` (a 401/403, an authentication error or an `api_key` code, as the
+adapters report it; `auth_error` and `api_key_expired` are accepted as the same
+thing), `launch_error` and `supervisor_error` (the latter two matched on
+`terminal_reason`, because their `failure_class` is an exception name). Left out
+because the task or a later retry may be the cause: `worker_api_error`,
+`provider_capacity`, the timeout classes, `nonzero_exit`, `empty_result`,
+`invalid_result`, `incomplete_work` and `write_scope_violation`. Any other outcome
+among the three, or fewer than three tasks, means the worker is not held back.
+`--allow-unhealthy` submits anyway and records `unhealthy_override` in
+`state.json`. For a role with `compare_workers`, an arm chosen by the alternation
+that is unhealthy is replaced by a healthy other arm (`route_arm` is the new one,
+`route_fallback_from` the skipped one); if none is healthy the submit is refused.
+A worker named with `--worker` is never replaced. Exit codes now also include 7
+`worker_unhealthy`.
+
 Settings and task records need not live under the project root. `submit --config
 <path>` reads that file instead of `<project-root>/.claude/delegate.toml`, and
 `--task-root <path>` (on `submit`, `status`, `collect`, `cancel`, `reconcile` and

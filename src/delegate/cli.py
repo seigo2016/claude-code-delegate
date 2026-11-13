@@ -52,7 +52,7 @@ OWNER_MISMATCH = 5
 #: Exit code for a submit made from inside a worker.
 NESTED_SUBMIT = 6
 #: Exit code for a submit to a worker that keeps failing for its own reasons.
-WORKER_UNHEALTHY = 7
+WORKER_UNHEALTHY = tasks.WorkerUnhealthy.exit_code
 
 
 def _caller(args: argparse.Namespace) -> dict[str, Any]:
@@ -118,9 +118,10 @@ def cmd_submit(args: argparse.Namespace) -> int:
             config_path=config_path,
             config_sha256=hashlib.sha256(config_bytes).hexdigest(),
             ledger=_ledger(args, project_root),
+            allow_unhealthy=args.allow_unhealthy,
         )
     except tasks.SubmitRefused as refused:
-        return _fail(str(refused), **refused.detail)
+        return _fail(str(refused), refused.exit_code, **refused.detail)
     except (config.ConfigError, ValueError) as error:
         return _fail(str(error))
     _print(handle)
@@ -678,6 +679,11 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--title", required=True)
     submit.add_argument("--packet", required=True, help="path to the task packet JSON")
     submit.add_argument("--worker", default=None)
+    submit.add_argument(
+        "--allow-unhealthy",
+        action="store_true",
+        help="submit even though the worker's last tasks all failed for the worker's own reasons",
+    )
     submit.add_argument(
         "--config",
         default=None,

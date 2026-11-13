@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Stop resubmitting to a broken worker: when a worker's three most recent terminal tasks all ended `failed` with the same worker-fault class (`auth_failed`/`auth_error`/`api_key_expired`, `launch_error`, `supervisor_error`), `submit` refuses with `worker_unhealthy` (exit 7) naming the worker, class and task ids. `--allow-unhealthy` overrides and records `unhealthy_override`; a `compare_workers` role moves to a healthy other arm and records `route_fallback_from`.
 - Stop nested delegation: workers run with `DELEGATE_WORKER=1` and `DELEGATE_PARENT_TASK=<task_id>`, `submit` refuses with `nested_submit` (exit 6) when `DELEGATE_WORKER` is set, and the worker prompt says the worker is not the Chair and must not delegate.
 - Add the role key `compare_workers = [...]` (two or more distinct configured workers, validated at load). Without `--worker`, submit alternates between them by counting the role's tasks that have a `route_arm`, and records `route_arm` and `route_policy = "compare"`; `--worker` still wins and records `route_policy = "explicit"`. Deduplication no longer merges tasks across arms.
 - Add an optional `[common] instructions` table to the settings: its text is placed once in every task's prompt, before the role's own instructions.
