@@ -151,7 +151,9 @@ skill と hook が実行します。人が直接使うのは診断のときだ�
 
 Claude Code が `CLAUDE_CODE_SESSION_ID` を提供する場合、submit はその ID を記録し、hook は同じ session の task だけを報告します。ID がない以前の task や submit は従来どおり共有されます。手動の `watch`、`reconcile`、`collect` は project 全体を対象とする診断用コマンドです。
 
-`submit --owner <id>`(または `DELEGATE_OWNER`)を付けると bridge 所有の task になります。`owner_kind` は `bridge`、session は記録されず、どの hook も通知しません。同じ `--owner` / `DELEGATE_OWNER` を付けた `collect` と `cancel` だけが操作でき、それ以外は `owner_mismatch`(終了コード 5)になります。session 所有の task(既定。owner 導入前の task を含む)は従来どおりどの session からも回収できますが、bridge owner からは回収できません。`collect` は受け取った相手を `delivered_to`(`{kind, id}`)に記録し、並行した collect のうち成功するのは 1 つだけで、残りは `already_delivered`(終了コード 3)になります。
+`submit --owner <id>` を付けると bridge 所有の task になります。`owner_kind` は `bridge`、session は記録されず、どの hook も通知しません。同じ `--owner` を付けた `collect` と `cancel` だけが操作でき、それ以外は `owner_mismatch`(終了コード 5)になります。session 所有の task(既定。owner 導入前の task を含む)は従来どおりどの session からも回収できますが、bridge owner からは回収できません。`collect` は受け取った相手を `delivered_to`(`{kind, id}`)に記録し、並行した collect のうち成功するのは 1 つだけで、残りは `already_delivered`(終了コード 3)になります。
+
+owner は `--owner` フラグだけで決まり、環境変数では設定できません。worker の環境からは `CLAUDE_CODE_SESSION_ID` と owner 関連の変数を取り除きます。owner の確認は session と bridge の間の取り違えを防ぐためのもので、認証ではありません(owner id は task の state に平文で保存されます)。
 
 ## 検出の範囲
 

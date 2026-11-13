@@ -50,19 +50,34 @@ def test_a_plain_submit_is_session_owned(workspace: Workspace) -> None:
     assert state["submitter_session_id"] == "s1"
 
 
-@pytest.mark.parametrize("how", ["flag", "env"])
-def test_an_explicit_owner_makes_a_bridge_task_with_no_session(
-    workspace: Workspace, how: str
-) -> None:
+def test_an_explicit_owner_makes_a_bridge_task_with_no_session(workspace: Workspace) -> None:
     workspace.env["CLAUDE_CODE_SESSION_ID"] = "s1"
-    if how == "env":
-        workspace.env["DELEGATE_OWNER"] = "bridge-a"
-        task_id = finished(workspace)
-    else:
-        task_id = finished(workspace, "--owner", "bridge-a")
+    task_id = finished(workspace, "--owner", "bridge-a")
     state = state_of(workspace, task_id)
     assert (state["owner_kind"], state["owner_id"]) == ("bridge", "bridge-a")
     assert state["submitter_session_id"] is None
+
+
+def test_the_owner_environment_variable_has_no_effect(workspace: Workspace) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "s1"
+    workspace.env["DELEGATE_OWNER"] = "bridge-a"
+    task_id = finished(workspace)
+    state = state_of(workspace, task_id)
+    assert (state["owner_kind"], state["owner_id"]) == ("session", "s1")
+    code, _ = call(workspace, "collect", task_id)
+    assert code == 0
+
+
+def test_the_worker_environment_lacks_session_and_owner_variables(monkeypatch) -> None:
+    from delegate import runner
+
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "s1")
+    monkeypatch.setenv("DELEGATE_OWNER", "bridge-a")
+    monkeypatch.setenv("KEEP_ME", "1")
+    env = runner.worker_environment()
+    assert "CLAUDE_CODE_SESSION_ID" not in env
+    assert not [name for name in env if name.startswith("DELEGATE_OWNER")]
+    assert env["KEEP_ME"] == "1"
 
 
 def test_a_bridge_task_is_collected_only_by_its_owner(workspace: Workspace) -> None:
@@ -84,7 +99,7 @@ def test_a_bridge_task_is_collected_only_by_its_owner(workspace: Workspace) -> N
     state = state_of(workspace, task_id)
     assert state["delivered_to"] == {"kind": "bridge", "id": "bridge-a"}
 
-    code, out = call(workspace, "collect", task_id, env={"DELEGATE_OWNER": "bridge-a"})
+    code, out = call(workspace, "collect", task_id, "--owner", "bridge-a")
     assert (code, out["error"]) == (3, "already_delivered")
 
 

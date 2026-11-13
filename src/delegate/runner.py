@@ -72,6 +72,19 @@ def _snapshot(view: diagnose.RunView) -> dict[str, Any]:
     return snapshot
 
 
+#: A worker that inherited these could act as the session that submitted it.
+_CALLER_IDENTITY = ("CLAUDE_CODE_SESSION_ID", "DELEGATE_OWNER")
+
+
+def worker_environment() -> dict[str, str]:
+    """This process's environment without anything that names the task's caller."""
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(_CALLER_IDENTITY)
+    }
+
+
 def _keep_last_message(
     task_dir: Path, view: diagnose.RunView, *, writes_allowed: bool = False
 ) -> dict[str, Any]:
@@ -203,7 +216,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             command_args["temp_dir"] = temp_dir
 
         command = adapter.build_command(**command_args)
-        worker_env = os.environ.copy()
+        worker_env = worker_environment()
         if temp_dir:
             worker_env["TMPDIR"] = str(temp_dir)
         if state["runs_commands"] and temp_dir:

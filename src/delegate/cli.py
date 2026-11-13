@@ -44,8 +44,13 @@ OWNER_MISMATCH = 5
 
 
 def _caller(args: argparse.Namespace) -> dict[str, Any]:
-    """Who is asking: a bridge naming its owner id, else the Claude Code session."""
-    owner = getattr(args, "owner", None) or os.environ.get("DELEGATE_OWNER")
+    """Who is asking: a bridge naming its owner id with ``--owner``, else the session.
+
+    Only the flag makes a bridge caller. An inherited environment variable once
+    turned a Claude Code session into one without anyone noticing. The id is
+    stored in plain text: this guards against mistakes, it is not authentication.
+    """
+    owner = getattr(args, "owner", None)
     if owner:
         return {"kind": "bridge", "id": owner}
     return {"kind": "session", "id": os.environ.get("CLAUDE_CODE_SESSION_ID") or None}
@@ -614,7 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument(
         "--owner",
         default=None,
-        help="own the task as a bridge (or set DELEGATE_OWNER); only this id may collect it",
+        help="own the task as a bridge; only this id may collect or cancel it",
     )
     submit.set_defaults(func=cmd_submit)
 
@@ -624,12 +629,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     collect = with_root(sub.add_parser("collect", help="take delivery of a finished task"))
     collect.add_argument("task_id")
-    collect.add_argument("--owner", default=None, help="bridge owner id (or set DELEGATE_OWNER)")
+    collect.add_argument("--owner", default=None, help="bridge owner id")
     collect.set_defaults(func=cmd_collect)
 
     cancel = with_root(sub.add_parser("cancel", help="stop a task"))
     cancel.add_argument("task_id")
-    cancel.add_argument("--owner", default=None, help="bridge owner id (or set DELEGATE_OWNER)")
+    cancel.add_argument("--owner", default=None, help="bridge owner id")
     cancel.set_defaults(func=cmd_cancel)
 
     reconcile = with_root(sub.add_parser("reconcile", help="classify tasks whose worker is gone"))
