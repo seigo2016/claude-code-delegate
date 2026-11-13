@@ -468,3 +468,25 @@ def test_an_identical_running_task_is_returned_rather_than_refused(case: Case) -
     assert again["deduplicated"] is True
     # A different request is still held back.
     assert case.refused(title="something else")["error"] == "worker_unhealthy"
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"failure_class": "auth_failed"}, "auth_failed"),
+        ({"failure_class": "auth_error"}, "auth_error"),
+        ({"failure_class": "api_key_expired"}, "api_key_expired"),
+        ({"failure_class": "KeyError", "terminal_reason": "supervisor_error"}, "supervisor_error"),
+        ({"failure_class": "OSError", "terminal_reason": "launch_error"}, "launch_error"),
+        ({"failure_class": "provider_capacity"}, None),
+        ({"failure_class": "worker_api_error"}, None),
+        ({"failure_class": "auth_failed", "status": "timeout"}, None),
+        ({"failure_class": "auth_failed", "status": "completed"}, None),
+    ],
+)
+def test_which_failures_say_the_worker_is_broken(
+    fields: dict[str, str], expected: str | None
+) -> None:
+    state = {"status": "failed", "terminal_reason": "nonzero_exit", **fields}
+
+    assert tasks.worker_fault(state) == expected
