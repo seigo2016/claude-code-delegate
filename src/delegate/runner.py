@@ -338,7 +338,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                 )
                 events.update(task_dir, resume_results=resume_results)
             blockers = (
-                sorted((item["reason"], item["text"]) for item in sanitized["blockers"])
+                sorted((item.get("reason"), item.get("text")) for item in sanitized["blockers"])
                 if incomplete
                 else None
             )

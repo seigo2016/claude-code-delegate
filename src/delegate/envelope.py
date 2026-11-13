@@ -41,11 +41,13 @@ def normalize_blocker(item: Any) -> Any:
     return item
 
 
+def _is_unfinished(item: Any) -> bool:
+    return isinstance(item, dict) and item.get("reason") == UNFINISHED
+
+
 def has_unfinished_blocker(result: dict[str, Any]) -> bool:
-    return any(
-        isinstance(item, dict) and item.get("reason") == UNFINISHED
-        for item in result.get("blockers") or []
-    )
+    blockers = result.get("blockers")
+    return isinstance(blockers, list) and any(_is_unfinished(item) for item in blockers)
 
 
 def settle(result: dict[str, Any], *, writes_allowed: bool) -> dict[str, Any]:
@@ -118,7 +120,7 @@ def chair_display(result: dict[str, Any]) -> dict[str, Any]:
             # Unfinished work decides the status, so it must survive the cut.
             value = sorted(
                 (normalize_blocker(item) for item in value),
-                key=lambda item: not (isinstance(item, dict) and item["reason"] == UNFINISHED),
+                key=lambda item: not _is_unfinished(item),
             )
         if isinstance(value, list):
             result[field] = [_shortened(item) for item in value[:MAX_ITEMS]]

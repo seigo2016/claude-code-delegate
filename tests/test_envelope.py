@@ -285,3 +285,10 @@ def test_incomplete_write_work_reads_not_done_blockers(
     }
     assert envelope.incomplete_write_work(result, writes_allowed=True) is incomplete
     assert envelope.incomplete_write_work(result, writes_allowed=False) is False
+
+
+@pytest.mark.parametrize("bad", [{"type": "x", "message": "y"}, {"text": 5}, 5, None, [1]])
+def test_non_conforming_blockers_never_raise_and_are_violations(bad: object) -> None:
+    cleaned = envelope.sanitize({**valid(), "blockers": [bad]}, writes_allowed=True)
+    assert envelope.violations(cleaned, writes_allowed=True)
+    assert envelope.chair_display(cleaned)

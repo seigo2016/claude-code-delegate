@@ -640,3 +640,16 @@ def test_read_only_task_keeps_completed_when_blockers_are_not_unfinished_work(
     workspace.script({"blockers": [{"reason": reason, "text": "n/a"}]})
     handle = workspace.submit()
     assert wait_for_terminal(workspace, handle["task_id"])["status"] == "completed"
+
+
+@pytest.mark.parametrize("bad", [{"type": "x", "message": "y"}, {"text": 5}, 5])
+@pytest.mark.parametrize("role", ["artifact-auditor", "bounded-implementer"])
+def test_a_malformed_blocker_ends_invalid_result_not_supervisor_error(
+    workspace: Workspace, role: str, bad: object
+) -> None:
+    workspace.script({"work_complete": True, "blockers": [bad]})
+    packet = write_packet() if role == "bounded-implementer" else PACKET
+    handle = workspace.submit(packet=packet, role=role)
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert state["terminal_reason"] == "invalid_result"
+    assert state["result_problems"]
