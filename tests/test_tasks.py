@@ -19,6 +19,7 @@ def _worker_binaries_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     """
     monkeypatch.setattr(shutil, "which", lambda name, *args, **kwargs: f"/usr/bin/{name}")
     monkeypatch.setenv("DELEGATE_WATCH_ROOT", str(tmp_path / "watch-sessions"))
+    (tmp_path / "README.md").write_text("readme\n", encoding="utf-8")
 
 
 def plan() -> config.Plan:
@@ -227,6 +228,8 @@ def test_submit_allows_a_read_unrelated_to_denied_paths(
 
     monkeypatch.setattr(tasks.subprocess, "Popen", lambda *args, **kwargs: Process())
     role = config.Role(name="auditor", level="standard")
+    (tmp_path / "public").mkdir()
+    (tmp_path / "public" / "report.md").write_text("x")
 
     handle = tasks.submit(
         project_root=tmp_path,
@@ -540,3 +543,58 @@ def test_submit_records_supervisor_launch_exception(
     assert state["status"] == "failed"
     assert state["failure_class"] == "OSError"
     assert state["failure_message"] == "supervisor could not start"
+
+
+class _Process:
+    pid = 123
+
+
+def test_a_missing_read_path_is_refused_and_nothing_is_written(tmp_path: Path) -> None:
+    role = config.Role(name="auditor", level="standard")
+    absolute = str(tmp_path / "absent-abs.md")
+
+    with pytest.raises(tasks.SubmitRefused, match="do not exist") as refused:
+        submit_with(role, tmp_path, read=["README.md", "docs/gone.md", absolute])
+
+    assert refused.value.detail["missing_reads"] == ["docs/gone.md", absolute]
+    assert not tasks.task_root(tmp_path).exists()
+
+
+def test_existing_files_and_directories_and_globs_are_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tasks.subprocess, "Popen", lambda *args, **kwargs: _Process())
+    role = config.Role(name="auditor", level="standard")
+    (tmp_path / "docs").mkdir()
+
+    handle = submit_with(
+        role, tmp_path, read=["README.md", "docs", str(tmp_path / "docs"), "src/**/*.py", "a?.md"]
+    )
+
+    assert handle["role"] == "auditor"
+
+
+def test_read_optional_may_be_absent_and_is_marked_in_the_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tasks.subprocess, "Popen", lambda *args, **kwargs: _Process())
+    role = config.Role(name="auditor", level="standard")
+
+    handle = submit_with(role, tmp_path, read_optional=["out/maybe.md"])
+
+    prompt = (tasks.task_root(tmp_path) / str(handle["task_id"]) / "prompt.md").read_text()
+    assert "if they exist" in prompt and "- out/maybe.md" in prompt
+    assert "- out/maybe.md" not in prompt.split("if they exist")[0]
+
+
+def test_read_optional_is_still_subject_to_denied_read_paths(tmp_path: Path) -> None:
+    role = config.Role(name="auditor", level="standard")
+
+    with pytest.raises(tasks.SubmitRefused, match="denied_read_paths"):
+        tasks.submit(
+            project_root=tmp_path,
+            settings=settings_with_denied_reads(role, (str(tmp_path / "private"),)),
+            role=role.name,
+            title="t",
+            value=packet(read_optional=["private/key"]),
+        )

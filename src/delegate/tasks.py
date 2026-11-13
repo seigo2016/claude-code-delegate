@@ -154,6 +154,9 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         lines.extend(f"- {name}" for name in context)
     lines.append("Read first:")
     lines.extend(f"- {item}" for item in value["read"] or ["- nothing specified"])
+    if value.get("read_optional"):
+        lines.append("Read these if they exist; they may be absent or be created by this task:")
+        lines.extend(f"- {item}" for item in value["read_optional"])
     if plan.denied_read_paths:
         lines.append("Do not read these paths:")
         lines.extend(f"- {path}" for path in plan.denied_read_paths)
@@ -392,20 +395,31 @@ def submit(
             "allowed_writes must contain canonical repository-relative paths",
             invalid_allowed_writes=invalid_writes,
         )
-    denied_reads = _denied_reads(project_root, value["read"], plan.denied_read_paths)
+    denied_reads = _denied_reads(
+        project_root, [*value["read"], *value.get("read_optional", [])], plan.denied_read_paths
+    )
     if denied_reads:
         raise SubmitRefused(
             "packet reads overlap denied_read_paths",
             denied_reads=denied_reads,
         )
     if plan.role.repo_local_reads:
-        invalid_reads = _invalid_scoped_reads(value["read"], plan.role)
+        invalid_reads = _invalid_scoped_reads(
+            [*value["read"], *value.get("read_optional", [])], plan.role
+        )
         if invalid_reads:
             raise SubmitRefused(
                 f"role {role} accepts repository-local reads only, "
                 "plus configured allowed_read_roots",
                 invalid_reads=invalid_reads,
             )
+    missing_reads = packet_module.missing_reads(value, project_root)
+    if missing_reads:
+        raise SubmitRefused(
+            "packet reads do not exist; list paths the worker may create or that may be absent "
+            "in read_optional",
+            missing_reads=missing_reads,
+        )
     try:
         adapter = registry.get(plan.adapter)
     except KeyError as error:

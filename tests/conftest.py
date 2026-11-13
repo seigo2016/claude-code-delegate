@@ -293,6 +293,9 @@ class Workspace:
 def workspace(tmp_path: Path) -> Workspace:
     repo = tmp_path / "repo"
     (repo / ".claude").mkdir(parents=True)
+    # Packets name these in `read`, and submit refuses a read that does not exist.
+    (repo / "tests").mkdir()
+    (repo / "README.md").write_text("readme\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     settings = repo / ".claude" / "delegate.toml"
     settings.write_text(SETTINGS, encoding="utf-8")

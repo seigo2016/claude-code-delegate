@@ -138,6 +138,13 @@ For a role that enables either policy, add only the applicable optional fields:
 }
 ```
 
+`read` entries are checked at submit: a concrete path that does not exist (relative
+paths are taken from the project root) refuses the submit and lists the missing
+paths, and no task is created. Entries containing `*`, `?` or `[` and URLs are not
+checked. Put paths the worker may read if present, or will itself create, in the
+optional `read_optional` list; they are not checked and the prompt marks them as
+possibly absent.
+
 ## What you get back
 
 | what happened | what you get |

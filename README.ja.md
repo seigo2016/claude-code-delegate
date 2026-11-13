@@ -95,6 +95,8 @@ task は Claude が組み立てます。何をするか、何を読んでよい�
 }
 ```
 
+`read` は submit 時に検査されます。実在しない具体的な path(相対 path は project root から解決)があると submit は拒否され、足りない path が列挙され、task は作られません。`*`、`?`、`[` を含む entry と URL は検査しません。あれば読む、または worker 自身が作る path は任意の `read_optional` に書きます。検査されず、prompt には存在しないかもしれないものとして示されます。
+
 ## 返ってくる結果
 
 | 起きたこと | 返る状態 |

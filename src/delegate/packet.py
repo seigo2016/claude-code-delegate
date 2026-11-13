@@ -6,10 +6,12 @@ the prohibitions come from configuration, so the caller cannot negotiate them.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 REQUIRED_FIELDS = ("objective", "read", "allowed_writes", "required_evidence", "host_only")
-STRING_LISTS = ("read", "allowed_writes", "required_evidence", "forbidden")
+STRING_LISTS = ("read", "read_optional", "allowed_writes", "required_evidence", "forbidden")
+GLOB_CHARACTERS = frozenset("*?[")
 
 
 def validate(value: Any) -> dict[str, Any]:
@@ -37,3 +39,20 @@ def validate(value: Any) -> dict[str, Any]:
     if "user_directed" in value and not isinstance(value["user_directed"], bool):
         raise ValueError("user_directed must be a boolean")
     return value
+
+
+def missing_reads(value: dict[str, Any], project_root: Path) -> list[str]:
+    """The ``read`` entries that name a concrete path and do not exist.
+
+    Relative entries are taken from the project root. Globs and URLs cannot be
+    checked this way, and ``read_optional`` is allowed to be absent, so none of
+    those are reported.
+    """
+    missing = []
+    for entry in value["read"]:
+        if "://" in entry or GLOB_CHARACTERS & set(entry):
+            continue
+        path = Path(entry).expanduser()
+        if not (path if path.is_absolute() else project_root / path).exists():
+            missing.append(entry)
+    return missing
