@@ -212,7 +212,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             temp_dir=str(temp_dir) if temp_dir is not None else None,
         )
         project_root = Path(state["project_root"])
-        before = workspace.changed_paths(project_root)
+        before = workspace.changed_paths(project_root, [task_dir.parent])
 
         # Written per task, so it is right however this package was installed.
         schema_path = task_dir / "result.schema.json"
@@ -435,7 +435,7 @@ def _write_scope(
     view: diagnose.RunView,
 ) -> dict[str, Any]:
     allowed = store.read_json(task_dir / "packet.json")["allowed_writes"]
-    after = workspace.changed_paths(project_root) if before is not None else None
+    after = workspace.changed_paths(project_root, [task_dir.parent]) if before is not None else None
     if before is None or after is None:
         return {
             "write_scope_checked": False,

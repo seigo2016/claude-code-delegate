@@ -6,6 +6,8 @@ can get its handle and stop thinking about the task.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -13,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,6 +27,7 @@ from delegate.adapters import registry
 
 SETTINGS_FILE = Path(".claude") / "delegate.toml"
 TASK_ROOT = Path(".claude") / "logs" / "delegate"
+SUBMIT_LOCK = ".submit.lock"
 CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md")
 _SHAPE = {
     "status": "completed | decision_needed | unverified",
@@ -167,8 +171,8 @@ def explicit_root(project_root: Path, root: str | Path | None) -> Path | None:
     """
     if not isinstance(root, str | Path) or not str(root):
         return None
-    path = Path(root)
-    return None if path == task_root(project_root) else path
+    path = Path(root).expanduser().resolve()
+    return None if path == task_root(project_root).resolve() else path
 
 
 def _completion_watch_registry_root() -> Path:
@@ -509,8 +513,9 @@ def _route(
 ) -> tuple[str | None, str | None, str | None]:
     """Which worker to ask for, and why: ``(worker, route_arm, route_policy)``.
 
-    An explicit worker always wins. Otherwise a role that compares workers takes
-    them in turn, counted over the tasks of that role already in the ledger.
+    An explicit worker always wins. Otherwise a role that compares workers takes the
+    arm that has been asked for least (the first of them on a tie), counted over the
+    comparing tasks of that role already in the ledger.
     """
     if worker is not None:
         return worker, None, "explicit"
@@ -518,11 +523,26 @@ def _route(
     if role_def is None or not role_def.compare_workers:
         return None, None, None
     arms = role_def.compare_workers
-    taken = sum(
-        1 for state in _all_states(root) if state.get("role") == role and state.get("route_arm")
-    )
-    arm = arms[taken % len(arms)]
+    asked = dict.fromkeys(arms, 0)
+    for state in _all_states(root):
+        if (
+            state.get("role") == role
+            and state.get("route_policy") == "compare"
+            and not _cancelled_before_start(state)
+        ):
+            # The arm asked for, not the one that ended up doing the work.
+            requested = state.get("route_fallback_from") or state.get("route_arm")
+            if requested in asked:
+                asked[requested] += 1
+    arm = min(arms, key=lambda name: asked[name])
     return arm, arm, "compare"
+
+
+def _cancelled_before_start(state: dict[str, Any]) -> bool:
+    """A task that was stopped before its worker began took no turn in the comparison."""
+    return state.get("status") == "cancelled" and (
+        state.get("terminal_reason") == "cancelled_before_start" or not state.get("started_at")
+    )
 
 
 def _all_states(root: Path) -> list[dict[str, Any]]:
@@ -604,6 +624,38 @@ def _reason(error: Exception) -> str:
     return str(error)
 
 
+@contextlib.contextmanager
+def _locked(root: Path) -> Generator[None, None, None]:
+    """Hold the task root's submit lock, waiting for whoever has it.
+
+    The arm a comparing role takes depends on the tasks already in the root, so
+    choosing it and recording the task must not interleave with another submit.
+    A root that this call had to create, and that the submit left empty (it was
+    refused), is removed again, so a refusal still leaves nothing behind.
+    """
+    existed = root.exists()
+    path = root / SUBMIT_LOCK
+    while True:
+        root.mkdir(parents=True, exist_ok=True)
+        lock = path.open("a+", encoding="utf-8")
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            # The file may have been removed by an earlier holder while we waited.
+            if os.fstat(lock.fileno()).st_ino == path.stat().st_ino:
+                break
+        except FileNotFoundError:
+            pass
+        lock.close()
+    try:
+        yield
+    finally:
+        if not existed and [entry.name for entry in root.iterdir()] == [SUBMIT_LOCK]:
+            path.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                root.rmdir()
+        lock.close()
+
+
 def submit(
     *,
     project_root: Path,
@@ -619,12 +671,69 @@ def submit(
     ledger: Path | None = None,
     allow_unhealthy: bool = False,
 ) -> dict[str, Any]:
+    """Create a task and start its worker.
+
+    A relative ``ledger`` is taken from the current directory, and the task records
+    its absolute form.
+    """
     packet_module.validate(value)
     if value["host_only"]:
         raise SubmitRefused("host_only work must stay in Claude Code", run_in="claude-code")
+    ledger_root = (
+        Path(ledger).expanduser().resolve() if ledger is not None else task_root(project_root)
+    )
+    with _locked(ledger_root):
+        return _submit(
+            project_root=project_root,
+            settings=settings,
+            role=role,
+            title=title,
+            value=value,
+            worker=worker,
+            fast=fast,
+            owner=owner,
+            config_path=config_path,
+            config_sha256=config_sha256,
+            ledger=ledger_root,
+            allow_unhealthy=allow_unhealthy,
+        )
 
+
+def _submit(
+    *,
+    project_root: Path,
+    settings: config.Settings,
+    role: str,
+    title: str,
+    value: dict[str, Any],
+    worker: str | None = None,
+    fast: bool | None = None,
+    owner: str | None = None,
+    config_path: Path | None = None,
+    config_sha256: str | None = None,
+    ledger: Path | None = None,
+    allow_unhealthy: bool = False,
+) -> dict[str, Any]:
     ledger_root = ledger if ledger is not None else task_root(project_root)
     chosen, route_arm, route_policy = _route(settings, role, worker, ledger_root)
+    key = fingerprint(project_root, role, title, value)
+    # An explicit owner makes a bridge task. It has no submitting session, so no
+    # Claude Code hook can match it.
+    owner_kind = "bridge" if owner else "session"
+    owner_id = owner or os.environ.get("CLAUDE_CODE_SESSION_ID") or None
+    submitter_session_id = None if owner else owner_id
+    # An identical task still running is the answer, whatever the worker's health
+    # is now: asking again must not be refused for the worker that is doing it.
+    try:
+        first = settings.plan(role, worker=chosen, fast=fast)
+    except config.ConfigError:
+        pass
+    else:
+        running = _find_duplicate(
+            ledger_root, key, owner_kind, owner_id, fast=first.fast, route_arm=route_arm
+        )
+        if running is not None:
+            return handle_of(running, deduplicated=True)
     candidates = _candidates(settings, role, chosen, route_policy)
     failures: list[tuple[str | None, Exception]] = []
     arm: _Arm | None = None
@@ -714,12 +823,6 @@ def submit(
 
     root = ledger_root
     root.mkdir(parents=True, exist_ok=True)
-    key = fingerprint(project_root, role, title, value)
-    # An explicit owner makes a bridge task. It has no submitting session, so no
-    # Claude Code hook can match it.
-    owner_kind = "bridge" if owner else "session"
-    owner_id = owner or os.environ.get("CLAUDE_CODE_SESSION_ID") or None
-    submitter_session_id = None if owner else owner_id
     duplicate = _find_duplicate(
         root, key, owner_kind, owner_id, fast=plan.fast, route_arm=route_arm
     )

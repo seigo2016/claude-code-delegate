@@ -68,8 +68,25 @@ def _is_ignored(path: str) -> bool:
     return bool(path.endswith(IGNORED_EXTENSIONS))
 
 
-def changed_paths(project_root: Path) -> set[str] | None:
-    """Paths git reports as changed, or None if this is not a git work tree."""
+def _ignored_prefixes(project_root: Path, roots: Iterable[Path]) -> tuple[str, ...]:
+    """The directories among ``roots`` that lie inside the project, as git names them."""
+    base = project_root.resolve()
+    found = []
+    for root in roots:
+        try:
+            found.append(root.resolve().relative_to(base).as_posix() + "/")
+        except ValueError:
+            continue
+    return tuple(found)
+
+
+def changed_paths(project_root: Path, ignored_roots: Iterable[Path] = ()) -> set[str] | None:
+    """Paths git reports as changed, or None if this is not a git work tree.
+
+    ``ignored_roots`` are directories whose contents are the supervisor's own
+    records, such as a task root placed inside the project.
+    """
+    ignored = _ignored_prefixes(project_root, ignored_roots)
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
@@ -85,7 +102,7 @@ def changed_paths(project_root: Path) -> set[str] | None:
     return {
         entry[3:]
         for entry in result.stdout.split("\0")
-        if len(entry) > 3 and not _is_ignored(entry[3:])
+        if len(entry) > 3 and not _is_ignored(entry[3:]) and not entry[3:].startswith(ignored)
     }
 
 

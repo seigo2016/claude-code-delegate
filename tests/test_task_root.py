@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from conftest import SETTINGS, Workspace
+from conftest import PACKET, SETTINGS, Workspace
 from test_lifecycle import wait_for_terminal
 
 WAKE = 2
@@ -229,3 +229,69 @@ def test_default_ledger_lines_do_not_mention_a_task_root(workspace: Workspace) -
     listing = workspace.run("reconcile")
     assert "task_root" not in listing["ready"][0]
     assert listing["next_action"] == "collect each ready task once"
+
+
+def test_relative_paths_resolve_against_the_current_directory_and_are_recorded_absolute(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    here = tmp_path / "here"
+    here.mkdir()
+    (here / "delegate.toml").write_text(SETTINGS, encoding="utf-8")
+    (workspace.repo / "packet.json").write_text(PACKET, encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "delegate", "submit", "--role", "artifact-auditor"]
+        + ["--title", "x", "--packet", str(workspace.repo / "packet.json")]
+        + ["--project-root", str(workspace.repo), "--config", "delegate.toml"]
+        + ["--task-root", "ledger/../ledger"],
+        capture_output=True,
+        text=True,
+        env=workspace.env,
+        cwd=here,
+    )
+    assert completed.returncode == 0, completed.stdout
+    handle = json.loads(completed.stdout)
+
+    assert handle["task_root"] == str(here / "ledger")
+    state = json.loads((here / "ledger" / handle["task_id"] / "state.json").read_text())
+    assert state["task_root"] == str(here / "ledger")
+    assert state["config_path"] == str(here / "delegate.toml")
+    assert Path(state["task_dir"]).is_absolute()
+
+
+def test_explicit_root_normalises_what_it_is_given(
+    workspace: Workspace, tmp_path: Path, monkeypatch
+) -> None:
+    from delegate import tasks
+
+    monkeypatch.chdir(tmp_path)
+    project = workspace.repo
+
+    assert tasks.explicit_root(project, "ledger") == tmp_path / "ledger"
+    assert (
+        tasks.explicit_root(project, str(project / ".claude" / "logs" / "x" / ".." / "delegate"))
+        is None
+    )
+    assert tasks.explicit_root(project, None) is None
+
+
+def test_submit_records_an_absolute_task_root_whatever_it_was_given(
+    workspace: Workspace, tmp_path: Path, monkeypatch
+) -> None:
+    from delegate import config, tasks
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", workspace.env["PATH"])
+    monkeypatch.setattr(tasks.subprocess, "Popen", lambda *a, **k: type("P", (), {"pid": 1})())
+    settings = config.parse(SETTINGS.encode(), Path("x.toml"))
+
+    handle = tasks.submit(
+        project_root=workspace.repo,
+        settings=settings,
+        role="artifact-auditor",
+        title="x",
+        value=json.loads(PACKET),
+        ledger=Path("relative-ledger"),
+    )
+
+    assert handle["task_root"] == str(tmp_path / "relative-ledger")

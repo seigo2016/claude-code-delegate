@@ -456,3 +456,15 @@ def test_a_comparison_falls_back_from_a_cooling_arm_and_probes_a_cooled_one(
     assert state["worker"] == "opencode"
     assert state["health_probe"] is True
     assert handle["route_fallback"]["from"] == "codex"
+
+
+def test_an_identical_running_task_is_returned_rather_than_refused(case: Case) -> None:
+    running = case.submit(expect_success=True)
+    case.failures()
+
+    again = case.submit(expect_success=True)
+
+    assert again["task_id"] == running["task_id"]
+    assert again["deduplicated"] is True
+    # A different request is still held back.
+    assert case.refused(title="something else")["error"] == "worker_unhealthy"

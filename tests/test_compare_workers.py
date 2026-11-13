@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
+import threading
 from pathlib import Path
 
 import pytest
 
-from conftest import SETTINGS, Workspace
-from delegate import config
+from conftest import PACKET, SETTINGS, Workspace
+from delegate import config, store, tasks
 
 COMPARE = """
 [workers.opencode]
@@ -156,3 +159,121 @@ def test_a_role_with_no_runnable_arm_is_refused(compare: Workspace) -> None:
     assert "task_id" not in out
     assert "worker binary not on PATH: codex" in out["error"]
     assert out["other_arms"][0]["worker"] == "opencode"
+
+
+def history(ledger: Path, task_id: str, **fields: object) -> None:
+    """A task an earlier submit left in the ledger, with only the fields routing reads."""
+    store.write_json(
+        ledger / task_id / "state.json",
+        {
+            "task_id": task_id,
+            "role": "ab",
+            "status": "completed",
+            "route_policy": "compare",
+            "route_arm": "codex",
+            "worker": "codex",
+            **fields,
+        },
+    )
+
+
+def next_worker(compare: Workspace, ledger: Path, title: str = "next") -> str:
+    handle = compare.submit("--task-root", str(ledger), role="ab", title=title, expect_success=True)
+    return handle["worker"]
+
+
+def test_only_this_roles_comparing_tasks_move_the_alternation(
+    compare: Workspace, tmp_path: Path
+) -> None:
+    ledger = tmp_path / "ledger"
+    history(ledger, "other-role", role="cd", route_arm="codex")
+
+    assert next_worker(compare, ledger) == "codex"
+
+
+def test_an_explicit_choice_does_not_move_the_alternation_even_with_an_arm_recorded(
+    compare: Workspace, tmp_path: Path
+) -> None:
+    ledger = tmp_path / "ledger"
+    history(ledger, "explicit", route_policy="explicit", route_arm="codex")
+
+    assert next_worker(compare, ledger) == "codex"
+
+
+def test_a_task_cancelled_before_it_started_does_not_count(
+    compare: Workspace, tmp_path: Path
+) -> None:
+    ledger = tmp_path / "ledger"
+    history(
+        ledger,
+        "never-ran",
+        status="cancelled",
+        terminal_reason="cancelled_before_start",
+        route_arm="codex",
+    )
+
+    assert next_worker(compare, ledger) == "codex"
+
+
+def test_a_task_cancelled_after_it_started_still_counts(compare: Workspace, tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger"
+    history(ledger, "ran", status="cancelled", started_at="2026-11-01T00:00:00+00:00")
+
+    assert next_worker(compare, ledger) == "opencode"
+
+
+def test_a_fallback_counts_for_the_arm_that_was_asked_for(
+    compare: Workspace, tmp_path: Path
+) -> None:
+    ledger = tmp_path / "ledger"
+    # codex was due, could not run, and opencode did the work in its place.
+    history(
+        ledger,
+        "fell-back",
+        worker="opencode",
+        route_arm="opencode",
+        route_fallback_from="codex",
+    )
+
+    assert next_worker(compare, ledger) == "opencode"
+
+
+def test_two_submits_at_once_take_different_arms(
+    compare: Workspace, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("PATH", compare.env["PATH"])
+    monkeypatch.setattr(tasks.subprocess, "Popen", lambda *a, **k: type("P", (), {"pid": 1})())
+    settings = config.parse(compare.settings.read_bytes(), compare.settings)
+    ledger = tmp_path / "ledger"
+    ledger.mkdir()
+    # Both submits get past the choice of arm together, unless something makes one wait.
+    meeting = threading.Barrier(2, timeout=1.5)
+    choose = tasks._route
+
+    def choose_then_meet(*args, **kwargs):
+        chosen = choose(*args, **kwargs)
+        with contextlib.suppress(threading.BrokenBarrierError):
+            meeting.wait()
+        return chosen
+
+    monkeypatch.setattr(tasks, "_route", choose_then_meet)
+    workers: list[str] = []
+
+    def submit(title: str) -> None:
+        handle = tasks.submit(
+            project_root=compare.repo,
+            settings=settings,
+            role="ab",
+            title=title,
+            value=json.loads(PACKET),
+            ledger=ledger,
+        )
+        workers.append(handle["worker"])
+
+    threads = [threading.Thread(target=submit, args=(f"t{i}",)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(workers) == ["codex", "opencode"]

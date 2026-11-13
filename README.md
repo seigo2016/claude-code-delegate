@@ -81,12 +81,16 @@ anything starts.
 To compare two workers on one role, give it `compare_workers = ["codex",
 "claude"]` (two or more distinct names of enabled workers, checked when the
 settings load). Without `--worker`, successive submits take the names in turn:
-the arm is `compare_workers[n % len]`, where `n` counts the role's tasks already
-in the task root that have a `route_arm`. The choice is recorded in `state.json`
+the arm is the one asked for least often, the first listed on a tie, counting only
+the role's tasks in the task root with `route_policy = "compare"` (not those
+cancelled before they started, and by the arm asked for, so a fallback counts for
+the arm it replaced). Choosing the arm and recording the task happen under a lock
+on the task root (`.submit.lock`), so concurrent submits alternate. The choice is recorded in `state.json`
 as `route_arm` (the worker name) and `route_policy = "compare"`. It replaces
 `preferred_worker` for that role; `--worker` still wins and records
 `route_policy = "explicit"` with no `route_arm`, so it does not move the
-alternation. Identical in-flight requests are deduplicated only within one arm.
+alternation. Identical in-flight requests are deduplicated only within one arm, and before the
+health check: an identical task that is still running is returned, not refused.
 If the arm the alternation chose cannot run (it cannot be planned, or its binary is
 missing or another submit-time check fails), the submit moves to the next arm
 instead, records `route_fallback_from` and `route_fallback_reason`, and its handle
@@ -274,7 +278,10 @@ shows `route_fallback` with the reason); if none can run the submit is refused.
 A worker named with `--worker` is never replaced. Exit codes now also include 7
 `worker_unhealthy`.
 
-Settings and task records need not live under the project root. `submit --config
+Settings and task records need not live under the project root. A relative
+`--config` or `--task-root` is taken from the current directory and recorded as an
+absolute path. A task root inside the project is not counted as the worker's
+changes in the write-scope check. `submit --config
 <path>` reads that file instead of `<project-root>/.claude/delegate.toml`, and
 `--task-root <path>` (on `submit`, `status`, `collect`, `cancel`, `reconcile` and
 `watch`) keeps the task records there instead of under
