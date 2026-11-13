@@ -224,7 +224,12 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
 
 
 def _find_duplicate(
-    root: Path, key: str, session_id: str | None = None, *, fast: bool = False
+    root: Path,
+    key: str,
+    owner_kind: str,
+    owner_id: str | None,
+    *,
+    fast: bool = False,
 ) -> dict[str, Any] | None:
     """The identical task that is still running, if there is one.
 
@@ -242,7 +247,8 @@ def _find_duplicate(
         if (
             state.get("fingerprint") == key
             and state.get("status") in events.ACTIVE_STATES
-            and state.get("submitter_session_id") == session_id
+            and state.get("owner_kind", "session") == owner_kind
+            and state.get("owner_id", state.get("submitter_session_id")) == owner_id
             and state.get("fast", False) == fast
         ):
             return state
@@ -344,6 +350,7 @@ def submit(
     value: dict[str, Any],
     worker: str | None = None,
     fast: bool | None = None,
+    owner: str | None = None,
 ) -> dict[str, Any]:
     packet_module.validate(value)
     if value["host_only"]:
@@ -395,8 +402,12 @@ def submit(
     root = task_root(project_root)
     root.mkdir(parents=True, exist_ok=True)
     key = fingerprint(project_root, role, title, value)
-    submitter_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID") or None
-    duplicate = _find_duplicate(root, key, submitter_session_id, fast=plan.fast)
+    # An explicit owner makes a bridge task. It has no submitting session, so no
+    # Claude Code hook can match it.
+    owner_kind = "bridge" if owner else "session"
+    owner_id = owner or os.environ.get("CLAUDE_CODE_SESSION_ID") or None
+    submitter_session_id = None if owner else owner_id
+    duplicate = _find_duplicate(root, key, owner_kind, owner_id, fast=plan.fast)
     if duplicate is not None:
         return handle_of(duplicate, deduplicated=True)
 
@@ -435,6 +446,9 @@ def submit(
         "pid": None,
         "session_id": None,
         "submitter_session_id": submitter_session_id,
+        "owner_kind": owner_kind,
+        "owner_id": owner_id,
+        "delivered_to": None,
         "exit_code": None,
         "terminal_reason": None,
         "failure_class": None,

@@ -38,6 +38,29 @@ def _load_task(project_root: Path, task_id: str) -> tuple[Path, dict[str, Any]]:
     return task_dir, store.read_json(task_dir / "state.json")
 
 
+#: Exit code for a caller that is not the task's owner. 1 is a parser error, 2 is
+#: ``WAKE``, 3 and 4 are taken by ``collect``.
+OWNER_MISMATCH = 5
+
+
+def _caller(args: argparse.Namespace) -> dict[str, Any]:
+    """Who is asking: a bridge naming its owner id, else the Claude Code session."""
+    owner = getattr(args, "owner", None) or os.environ.get("DELEGATE_OWNER")
+    if owner:
+        return {"kind": "bridge", "id": owner}
+    return {"kind": "session", "id": os.environ.get("CLAUDE_CODE_SESSION_ID") or None}
+
+
+def _owner_mismatch(state: dict[str, Any], caller: dict[str, Any]) -> bool:
+    """A bridge task answers only to its owner; a session task, to any session.
+
+    State from before owners existed has no ``owner_kind`` and is a session task.
+    """
+    if state.get("owner_kind", "session") == "bridge":
+        return caller["kind"] != "bridge" or caller["id"] != state.get("owner_id")
+    return caller["kind"] != "session"
+
+
 def cmd_submit(args: argparse.Namespace) -> int:
     project_root = _root(args.project_root)
     try:
@@ -49,6 +72,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
     except (OSError, json.JSONDecodeError) as error:
         return _fail(f"cannot read packet: {error}")
 
+    caller = _caller(args)
     try:
         handle = tasks.submit(
             project_root=project_root,
@@ -58,6 +82,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
             value=value,
             worker=args.worker,
             fast=args.fast,
+            owner=caller["id"] if caller["kind"] == "bridge" else None,
         )
     except tasks.SubmitRefused as refused:
         return _fail(str(refused), **refused.detail)
@@ -82,6 +107,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
         task_dir, state = _load_task(project_root, args.task_id)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         return _fail(f"task_not_found: {error}")
+    caller = _caller(args)
+    if _owner_mismatch(state, caller):
+        return _fail("owner_mismatch", OWNER_MISMATCH)
     if state["status"] not in events.TERMINAL_STATES:
         return _fail(
             "task_not_terminal",
@@ -98,7 +126,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         state["status"] == "degraded" and state.get("recovery_status") == "usable"
     ):
         result = envelope.chair_display(store.read_json(Path(state["result_path"])))
-    state, claimed = events.claim_delivery(task_dir)
+    state, claimed = events.claim_delivery(task_dir, delivered_to=caller)
     if not claimed:
         return _fail("already_delivered", 3, delivered_at=state["delivered_at"])
     delivery = {
@@ -140,6 +168,8 @@ def cmd_cancel(args: argparse.Namespace) -> int:
         task_dir, state = _load_task(_root(args.project_root), args.task_id)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         return _fail(f"task_not_found: {error}")
+    if _owner_mismatch(state, _caller(args)):
+        return _fail("owner_mismatch", OWNER_MISMATCH)
     if state["status"] in events.TERMINAL_STATES:
         _print(state)
         return 0
@@ -581,6 +611,11 @@ def build_parser() -> argparse.ArgumentParser:
     fast_flags = submit.add_mutually_exclusive_group()
     fast_flags.add_argument("--fast", dest="fast", action="store_const", const=True, default=None)
     fast_flags.add_argument("--no-fast", dest="fast", action="store_const", const=False)
+    submit.add_argument(
+        "--owner",
+        default=None,
+        help="own the task as a bridge (or set DELEGATE_OWNER); only this id may collect it",
+    )
     submit.set_defaults(func=cmd_submit)
 
     status = with_root(sub.add_parser("status", help="read one task's state"))
@@ -589,10 +624,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     collect = with_root(sub.add_parser("collect", help="take delivery of a finished task"))
     collect.add_argument("task_id")
+    collect.add_argument("--owner", default=None, help="bridge owner id (or set DELEGATE_OWNER)")
     collect.set_defaults(func=cmd_collect)
 
     cancel = with_root(sub.add_parser("cancel", help="stop a task"))
     cancel.add_argument("task_id")
+    cancel.add_argument("--owner", default=None, help="bridge owner id (or set DELEGATE_OWNER)")
     cancel.set_defaults(func=cmd_cancel)
 
     reconcile = with_root(sub.add_parser("reconcile", help="classify tasks whose worker is gone"))

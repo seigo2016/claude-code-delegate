@@ -222,6 +222,15 @@ pending watches migrate when their owner runs the hook. Submissions without the
 ID do not wake a session. Manual `watch`, `reconcile`, and `collect`
 remain project-wide diagnostic commands.
 
+`submit --owner <id>` (or `DELEGATE_OWNER`) makes a bridge-owned task instead:
+`owner_kind` is `bridge`, no session is recorded, and no hook announces it.
+Only `collect` and `cancel` called with the same `--owner` / `DELEGATE_OWNER`
+may act on it; anyone else gets `owner_mismatch` (exit 5). A session-owned task
+(the default, and any task from before owners existed) stays open to every
+session, but not to a bridge owner. `collect` records who took delivery in
+`delivered_to` (`{kind, id}`), and of concurrent collects exactly one succeeds;
+the rest get `already_delivered` (exit 3).
+
 ## What is and is not checked
 
 Detected:

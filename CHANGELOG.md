@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Make `collect` deliver exactly once: the delivered check and its record now share one lock hold.
+- Add owner kinds: `submit --owner` / `DELEGATE_OWNER` makes a bridge-owned task that only the same owner may `collect` or `cancel` (`owner_mismatch`, exit 5) and that hooks never announce. `collect` records `delivered_to`.
+
 ## 0.2.13
 
 - Add opt-in Codex fast mode per worker level, role, or submit flag, and record its resolved value.
