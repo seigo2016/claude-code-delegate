@@ -236,6 +236,12 @@ something.
 `submit` takes `--worker <name>` to override the backend for one task. Every
 command takes `--project-root`.
 
+A worker is not the Chair. The runner starts every worker with `DELEGATE_WORKER=1`
+and `DELEGATE_PARENT_TASK=<task_id>`, the prompt says it must not delegate whatever
+repository instructions say, and `delegate submit` called with `DELEGATE_WORKER`
+set is refused with `nested_submit` (exit 6). Exit codes: 1 error, 2 `WAKE`, 3
+`already_delivered`, 4 `task_not_terminal`, 5 `owner_mismatch`, 6 `nested_submit`.
+
 Settings and task records need not live under the project root. `submit --config
 <path>` reads that file instead of `<project-root>/.claude/delegate.toml`, and
 `--task-root <path>` (on `submit`, `status`, `collect`, `cancel`, `reconcile` and

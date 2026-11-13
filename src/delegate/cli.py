@@ -49,6 +49,10 @@ def _load_task(
 #: Exit code for a caller that is not the task's owner. 1 is a parser error, 2 is
 #: ``WAKE``, 3 and 4 are taken by ``collect``.
 OWNER_MISMATCH = 5
+#: Exit code for a submit made from inside a worker.
+NESTED_SUBMIT = 6
+#: Exit code for a submit to a worker that keeps failing for its own reasons.
+WORKER_UNHEALTHY = 7
 
 
 def _caller(args: argparse.Namespace) -> dict[str, Any]:
@@ -75,6 +79,13 @@ def _owner_mismatch(state: dict[str, Any], caller: dict[str, Any]) -> bool:
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
+    if os.environ.get("DELEGATE_WORKER"):
+        return _fail(
+            "nested_submit",
+            NESTED_SUBMIT,
+            reason="a delegated worker must not delegate; report back to the Chair instead",
+            parent_task=os.environ.get("DELEGATE_PARENT_TASK"),
+        )
     project_root = _root(args.project_root)
     config_path = (
         Path(args.config).expanduser().resolve()

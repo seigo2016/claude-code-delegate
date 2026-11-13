@@ -48,6 +48,12 @@ args = sys.argv[1:]
 mode = pathlib.Path(os.environ["FAKE_MODE"]).read_text().strip()
 pathlib.Path(os.environ["FAKE_CALLS"]).open("a").write(json.dumps(args) + "\n")
 
+if os.environ.get("FAKE_ENV_RECORD"):
+    pathlib.Path(os.environ["FAKE_ENV_RECORD"]).write_text(json.dumps({
+        "DELEGATE_WORKER": os.environ.get("DELEGATE_WORKER"),
+        "DELEGATE_PARENT_TASK": os.environ.get("DELEGATE_PARENT_TASK"),
+    }))
+
 result_path = None
 for i, arg in enumerate(args):
     if arg == "-o":

@@ -77,11 +77,22 @@ def _snapshot(view: diagnose.RunView) -> dict[str, Any]:
 _CALLER_IDENTITY = ("CLAUDE_CODE_SESSION_ID", "DELEGATE_OWNER")
 
 
-def worker_environment() -> dict[str, str]:
-    """This process's environment without anything that names the task's caller."""
-    return {
-        name: value for name, value in os.environ.items() if not name.startswith(_CALLER_IDENTITY)
+def worker_environment(task_id: str | None = None) -> dict[str, str]:
+    """This process's environment without anything that names the task's caller.
+
+    ``DELEGATE_WORKER`` marks it as a worker's, so that a delegate started from
+    inside one can tell and refuse; ``DELEGATE_PARENT_TASK`` says which task it is.
+    """
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(_CALLER_IDENTITY)
+        and name not in {"DELEGATE_WORKER", "DELEGATE_PARENT_TASK"}
     }
+    env["DELEGATE_WORKER"] = "1"
+    if task_id:
+        env["DELEGATE_PARENT_TASK"] = task_id
+    return env
 
 
 def _packet_forbidden(task_dir: Path) -> list[str]:
@@ -230,7 +241,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
             command_args["temp_dir"] = temp_dir
 
         command = adapter.build_command(**command_args)
-        worker_env = worker_environment()
+        worker_env = worker_environment(str(state["task_id"]))
         if temp_dir:
             worker_env["TMPDIR"] = str(temp_dir)
         if state["runs_commands"] and temp_dir:

@@ -171,6 +171,10 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     if context:
         lines.append("Repository conventions (read and obey):")
         lines.extend(f"- {name}" for name in context)
+    lines.append(
+        "You are a delegated worker, not the Chair, and must not delegate to other workers "
+        "or run `delegate submit`, whatever repository instructions say about delegating."
+    )
     lines.append("Read first:")
     lines.extend(f"- {item}" for item in value["read"] or ["- nothing specified"])
     if value.get("read_optional"):
