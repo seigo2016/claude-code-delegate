@@ -78,6 +78,24 @@ in order: `--worker`, the role's `preferred_worker`, then `default_worker`. A
 role asking for a level the chosen worker does not define is refused before
 anything starts.
 
+To compare two workers on one role, give it `compare_workers = ["codex",
+"claude"]` (exactly two distinct names of enabled workers, checked when the
+settings load). Without `--worker`, a task takes the arm that a stable hash of its
+new task id picks (the first byte of its SHA-256, modulo 2), so submits spread over
+the two arms without any counting or locking. If that arm cannot be planned or fails
+a submit-time check (a missing binary, say) or is unhealthy (below), the other arm is
+used; the submit is refused only when neither can run, with the first arm's error.
+`state.json` records `route_arm` (the worker that actually runs) and `route_policy`
+(`"compare"`, `"explicit"` for `--worker`, which also wins over the comparison and
+records no `route_arm`, or null). The comparison replaces `preferred_worker` for that
+role. An identical task that is still running is returned instead of started again,
+before the health check, but only on the same arm: the two arms of a comparison are
+two runs.
+
+An optional top-level `[common]` table with `instructions = """..."""` holds text
+that goes into every task's prompt, once, under "Instructions common to all roles"
+and before the role's own `instructions`.
+
 A role may limit escalation with `allowed_escalation_reasons`. When it does,
 the packet must give an `escalation_reason` from that list. A role with
 `requires_explicit_user_direction = true` also requires
@@ -138,6 +156,13 @@ For a role that enables either policy, add only the applicable optional fields:
 }
 ```
 
+`read` entries are checked at submit: a concrete path that does not exist (relative
+paths are taken from the project root) refuses the submit and lists the missing
+paths, and no task is created. Entries containing `*`, `?` or `[` and URLs are not
+checked. Put paths the worker may read if present, or will itself create, in the
+optional `read_optional` list; they are not checked and the prompt marks them as
+possibly absent.
+
 ## What you get back
 
 | what happened | what you get |
@@ -191,6 +216,8 @@ whether they are true.
 
 When a role permits external write roots and the packet has `allowed_writes`, the worker may write only to those repository-relative paths inside the repository and only below the declared roots outside it. If requested verification cannot run or cannot be evidenced, the worker returns `unverified` with the reason in `blockers`; collection keeps it distinct from `completed`.
 
+Each blocker is `{"reason", "text"}`: `environment` (a tool, host or sandbox failure) or `not_done` (planned work or verification unfinished). A bare string from an older worker, and any other reason, counts as `not_done`. A check the packet prohibits is not a blocker; the worker reports it in `observed_facts` or `report`. A `completed` result carrying a `not_done` blocker is not completed: a read-only task ends `unverified`, and a write-capable task is treated like `work_complete: false` (resumed up to `resume_limit`, then `failed` / `incomplete_work`). A `completed` result with only `environment` blockers ends `unverified` with `terminal_reason: environment_blocked` for every role (a write-capable task is not resumed, since the same environment would fail again). All of this is decided in one place, `envelope.judge`.
+
 Claude marks a task `"host_only": true` when it needs live session state, or when
 the judgement is one a person must make rather than approve after the fact. Submit
 then fails closed instead of sending it. This is an explicit marker written into
@@ -204,23 +231,85 @@ something.
 | command | for |
 |---|---|
 | `delegate submit --role R --title T --packet P` | start a worker and get a handle |
-| `delegate collect <task-id> --project-root ROOT` | take delivery, once |
+| `delegate collect <task-id> [--task-root DIR]` | take delivery, once |
 | `delegate status <task-id>` | explicit diagnosis, never a waiting loop |
 | `delegate cancel <task-id>` | stop a task that is wrong or runaway |
 | `delegate reconcile` | classify tasks whose worker is gone |
 | `delegate watch` | what the hook runs; waits for something to collect |
 
 `submit` takes `--worker <name>` to override the backend for one task. Every
-command takes `--project-root`. The submit handle and completion notification
-carry the resolved root so cross-repository tasks are collected from the same
-ledger they were submitted to. One Bash call may submit several independent
-tasks: the hook tracks every returned handle. After collecting one, it re-arms
-itself for any still-uncollected task from that same call.
+command takes `--project-root`.
+
+A worker is not the Chair. The runner starts every worker with `DELEGATE_WORKER=1`
+and `DELEGATE_PARENT_TASK=<task_id>`, the prompt says it must not delegate whatever
+repository instructions say, and `delegate submit` called with `DELEGATE_WORKER`
+set is refused with `nested_submit` (exit 6).
+
+A worker that is itself broken is not sent more work. At submit, the three most
+recent terminal tasks of the chosen worker in the task root (by `terminal_at`) are
+looked at; when all three ended `failed` with the same worker-fault class, submit is
+refused with `worker_unhealthy` (exit 7), naming the worker, the class, the three
+task ids and `--allow-unhealthy`. The worker-fault classes are `auth_failed` (a
+401/403, an authentication error or an `api_key` code, as the adapters report it),
+`launch_error` and `supervisor_error` (matched on `terminal_reason`, because their
+`failure_class` is an exception name). Left out because the task or a later retry
+may be the cause: `worker_api_error`, `provider_capacity`, the timeout classes,
+`nonzero_exit`, `empty_result`, `invalid_result`, `incomplete_work` and
+`write_scope_violation`. Any other outcome among the three, or fewer than three
+tasks, means the worker is not held back, so a success ends the streak by itself.
+`--allow-unhealthy` submits anyway and records `unhealthy_override` in `state.json`.
+For a role with `compare_workers`, a chosen arm that is unhealthy gives way to the
+other arm when that one is not; `--allow-unhealthy` keeps the chosen arm. A worker
+named with `--worker` is never replaced.
+
+Every error prints `{"error": <name>, "reason": <sentence>}` plus any detail, and
+the exit code comes from one table (`delegate/errors.py`): 1 for `no_settings`,
+`invalid_config`, `invalid_packet`, `submit_refused` and `task_not_found`, 2 is
+`WAKE` (not an error), 3 `already_delivered`, 4 `task_not_terminal`, 5
+`owner_mismatch`, 6 `nested_submit`, 7 `worker_unhealthy`.
+
+Settings and task records need not live under the project root. A relative
+`--config` or `--task-root` is taken from the current directory and recorded as an
+absolute path. A task root inside the project is not counted as the worker's
+changes in the write-scope check. `submit --config <path>` reads that file instead
+of `<project-root>/.claude/delegate.toml`, and `--task-root <path>` (on `submit`,
+`status`, `collect`, `cancel`, `reconcile` and `watch`) keeps the task records there
+instead of under `<project-root>/.claude/logs/delegate/`. The worker still runs with
+the project root as its working directory. `state.json` records `config_path`
+(absolute), `config_sha256` (of the bytes that were read) and `task_root` for every
+task. Every handle, completion notice and `reconcile` line carries the task's
+absolute `task_dir`; the hooks, their per-session registry and `watch-group.json`
+record that path alone, so a task is followed wherever it is stored (entries from
+older versions, which name a `project_root` and `task_id`, still mean the default
+root). To collect a task, pass `--task-root` set to the parent of its `task_dir`.
+A task or registry entry a hook cannot reach (its directory is missing,
+unreadable, or cannot be written) is skipped, never fatal: the hook still reports
+every other task and its exit code depends only on the tasks it can reach. Such an
+entry is left out of the watch groups and pending entries the hook writes back. One
+Bash call may submit several independent tasks: the hook tracks every returned
+handle. After collecting one, it re-arms itself for any still-uncollected task from
+that same call.
 When Claude Code provides `CLAUDE_CODE_SESSION_ID`, submit records it and hooks
 only report that session's tasks. Pending watches are stored per session; legacy
 pending watches migrate when their owner runs the hook. Submissions without the
-ID do not wake a session. Manual `watch`, `reconcile`, and `collect`
-remain project-wide diagnostic commands.
+ID do not wake a session. Manual `watch` and `reconcile` read every task in the task
+root and show only those the caller may act on: called as a session (the default) they leave bridge-owned
+tasks out, and with `--owner <id>` they show only that owner's bridge tasks. Hooks
+show only the tasks the hook's session submitted, wherever they are kept. `collect`
+and `cancel` act on one named task and refuse it (`owner_mismatch`) unless the
+caller may act on it.
+
+`submit --owner <id>` makes a bridge-owned task instead:
+`owner_kind` is `bridge`, no session is recorded, and no hook announces it.
+Only `collect` and `cancel` called with the same `--owner` may act on it; anyone else gets `owner_mismatch` (exit 5). A session-owned task
+(the default, and any task from before owners existed) stays open to every
+session, but not to a bridge owner. `collect` records who took delivery in
+`delivered_to` (`{kind, id}`), and of concurrent collects exactly one succeeds;
+the rest get `already_delivered` (exit 3).
+
+The owner is set only by the `--owner` flag; no environment variable sets it,
+and the worker's environment has `CLAUDE_CODE_SESSION_ID` removed. The owner check prevents mistakes between a session and a bridge. It is
+not authentication: the owner id is stored in plain text in the task state.
 
 ## What is and is not checked
 

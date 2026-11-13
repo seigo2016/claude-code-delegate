@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ _SHAPE = {
     "observed_facts": ["what you saw, each with the path it came from"],
     "verified_comparisons": ["what you checked against what, and the outcome"],
     "artifact_paths": ["paths a reader should open"],
-    "blockers": ["what stopped you, if anything"],
+    "blockers": [{"reason": "environment | not_done", "text": "what stopped you"}],
     "decision_needed": "the question only the caller can answer, or null",
     "report": "full report text or null",
     "counts": [{"name": "count name", "count": 0}],
@@ -41,13 +42,93 @@ FORBIDDEN = (
     "conclusions beyond the requested evidence",
 )
 
+#: Who a task answers to, or who is asking: ``(kind, id)``.
+Owner = tuple[str, str | None]
+
 
 class SubmitRefused(Exception):
     """The request will not start a worker, and why."""
 
+    code = "submit_refused"
+
     def __init__(self, message: str, **detail: Any) -> None:
         super().__init__(message)
         self.detail = detail
+
+
+class WorkerUnhealthy(SubmitRefused):
+    """The worker's last runs all failed for a reason that lies with the worker."""
+
+    code = "worker_unhealthy"
+
+
+def owner_of(state: dict[str, Any]) -> Owner:
+    """Who a task answers to. State from before owners existed is a session task."""
+    return (
+        state.get("owner_kind", "session"),
+        state.get("owner_id", state.get("submitter_session_id")),
+    )
+
+
+def may_act(state: dict[str, Any], caller: Owner) -> bool:
+    """A bridge task answers only to its owner; a session task, to any session.
+
+    The id is stored in plain text: this guards against mistakes, not a hostile caller.
+    """
+    kind, owner_id = owner_of(state)
+    return caller == (kind, owner_id) if kind == "bridge" else caller[0] == "session"
+
+
+#: How many consecutive same-class failures make a worker unhealthy.
+UNHEALTHY_STREAK = 3
+#: ``terminal_reason`` values that mean the worker could not be run at all. Their
+#: ``failure_class`` is an exception name that varies, so the reason is what is compared.
+BROKEN_REASONS = frozenset({"launch_error", "supervisor_error"})
+
+
+def worker_fault(state: dict[str, Any]) -> str | None:
+    """The class of a failure that says the worker is broken, not the task.
+
+    Left out on purpose, because a retry can well succeed or the task is at fault:
+    ``worker_api_error`` (any other provider error, including a bad request),
+    ``provider_capacity`` and the timeout classes (transient), and ``nonzero_exit``,
+    ``empty_result``, ``invalid_result``, ``incomplete_work`` and
+    ``write_scope_violation`` (what this task did, not whether the worker starts).
+    """
+    if state.get("status") != "failed":
+        return None
+    if state.get("terminal_reason") in BROKEN_REASONS:
+        return str(state["terminal_reason"])
+    if state.get("failure_class") == "auth_failed":
+        return "auth_failed"
+    return None
+
+
+def _all_states(root: Path) -> list[dict[str, Any]]:
+    found = []
+    for path in sorted(root.glob("*/state.json")):
+        try:
+            found.append(store.read_json(path))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return found
+
+
+def unhealthy_streak(root: Path, worker: str) -> tuple[str, list[str]] | None:
+    """``(class, task ids)`` when the worker's last three terminal tasks all failed alike."""
+    finished = []
+    for state in _all_states(root):
+        if state.get("worker") == worker and state.get("status") in events.TERMINAL_STATES:
+            try:
+                finished.append((datetime.fromisoformat(str(state["terminal_at"])), state))
+            except (KeyError, ValueError):
+                continue
+    finished.sort(key=lambda item: item[0], reverse=True)
+    latest = [state for _, state in finished[:UNHEALTHY_STREAK]]
+    classes = {worker_fault(state) for state in latest}
+    if len(latest) < UNHEALTHY_STREAK or len(classes) != 1 or None in classes:
+        return None
+    return str(classes.pop()), [str(state["task_id"]) for state in latest]
 
 
 def settings_path(project_root: Path) -> Path:
@@ -58,71 +139,74 @@ def task_root(project_root: Path) -> Path:
     return project_root / TASK_ROOT
 
 
-def _completion_watch_registry_root() -> Path:
-    configured = os.environ.get("DELEGATE_WATCH_ROOT")
-    if configured:
-        return Path(configured)
-    return Path.home() / ".claude" / "delegate" / "watch-sessions"
+def entry_dir(entry: Any) -> Path | None:
+    """The task directory a watch or handle entry names, if it names one.
+
+    Entries written before ``task_dir`` existed carry ``project_root`` and
+    ``task_id`` and mean a task under the project's default task root.
+    """
+    if not isinstance(entry, dict):
+        return None
+    if isinstance(entry.get("task_dir"), str):
+        return Path(entry["task_dir"])
+    if isinstance(entry.get("project_root"), str) and isinstance(entry.get("task_id"), str):
+        return task_root(Path(entry["project_root"])) / entry["task_id"]
+    return None
 
 
-def _completion_watch_path(session_id: str, project_root: Path, task_id: str) -> Path:
-    identity = f"{project_root}\0{task_id}".encode()
-    return (
-        _completion_watch_registry_root()
-        / hashlib.sha256(session_id.encode()).hexdigest()
-        / "pending"
-        / (hashlib.sha256(identity).hexdigest() + ".json")
+def watch_registry_dir(session_id: str) -> Path:
+    root = Path(
+        os.environ.get("DELEGATE_WATCH_ROOT")
+        or Path.home() / ".claude" / "delegate" / "watch-sessions"
     )
+    return root / hashlib.sha256(session_id.encode()).hexdigest()
 
 
-def register_completion_watch(project_root: Path, task_id: str, session_id: str | None) -> None:
+def _pending_path(session_id: str, task_dir: Path) -> Path:
+    digest = hashlib.sha256(str(task_dir).encode()).hexdigest()
+    return watch_registry_dir(session_id) / "pending" / f"{digest}.json"
+
+
+def register_completion_watch(task_dir: Path, session_id: str | None) -> None:
     """Make a submitted task discoverable even if a shell pipeline hides its handle."""
-    if not session_id:
-        return
-    store.write_json(
-        _completion_watch_path(session_id, project_root, task_id),
-        {"project_root": str(project_root), "task_id": task_id},
-    )
+    if session_id:
+        store.write_json(_pending_path(session_id, task_dir), {"task_dir": str(task_dir)})
 
 
-def pending_completion_watches(session_id: str | None = None) -> list[dict[str, str]]:
+def pending_completion_watches(session_id: str | None = None) -> list[Path]:
+    """The task directories this session submitted and has not yet been told about."""
     if not session_id:
         return []
-    root = _completion_watch_registry_root()
-    found: list[dict[str, str]] = []
-    session_root = root / hashlib.sha256(session_id.encode()).hexdigest() / "pending"
-    legacy_root = root / "pending-submissions"
+    session_root = watch_registry_dir(session_id) / "pending"
+    legacy_root = watch_registry_dir(session_id).parent / "pending-submissions"
+    found: list[Path] = []
     for path in [*sorted(session_root.glob("*.json")), *sorted(legacy_root.glob("*.json"))]:
         try:
-            value = store.read_json(path)
+            task_dir = entry_dir(store.read_json(path))
+            if task_dir is None or owner_of(store.read_json(task_dir / "state.json")) != (
+                "session",
+                session_id,
+            ):
+                continue
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        if isinstance(value.get("project_root"), str) and isinstance(value.get("task_id"), str):
+        if path != _pending_path(session_id, task_dir):
+            # Written by an older version, which named it differently.
             try:
-                state = store.read_json(
-                    task_root(Path(value["project_root"])) / value["task_id"] / "state.json"
-                )
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
-            owner = state.get("submitter_session_id")
-            if owner != session_id:
-                continue
-            if path.parent == legacy_root:
-                destination = _completion_watch_path(
-                    session_id, Path(value["project_root"]), value["task_id"]
-                )
-                store.write_json(destination, value)
+                register_completion_watch(task_dir, session_id)
                 path.unlink(missing_ok=True)
-            found.append({"project_root": value["project_root"], "task_id": value["task_id"]})
+            except OSError:
+                pass
+        found.append(task_dir)
     return found
 
 
-def clear_pending_completion_watches(session_id: str, watches: list[dict[str, str]]) -> None:
-    if not session_id:
-        return
-    for watch in watches:
-        path = _completion_watch_path(session_id, Path(watch["project_root"]), watch["task_id"])
-        path.unlink(missing_ok=True)
+def clear_pending_completion_watches(session_id: str, task_dirs: list[Path]) -> None:
+    for task_dir in task_dirs:
+        try:
+            _pending_path(session_id, task_dir).unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def fingerprint(project_root: Path, role: str, title: str, value: dict[str, Any]) -> str:
@@ -147,8 +231,15 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     if context:
         lines.append("Repository conventions (read and obey):")
         lines.extend(f"- {name}" for name in context)
+    lines.append(
+        "You are a delegated worker, not the Chair, and must not delegate to other workers "
+        "or run `delegate submit`, whatever repository instructions say about delegating."
+    )
     lines.append("Read first:")
     lines.extend(f"- {item}" for item in value["read"] or ["- nothing specified"])
+    if value.get("read_optional"):
+        lines.append("Read these if they exist; they may be absent or be created by this task:")
+        lines.extend(f"- {item}" for item in value["read_optional"])
     if plan.denied_read_paths:
         lines.append("Do not read these paths:")
         lines.extend(f"- {path}" for path in plan.denied_read_paths)
@@ -178,6 +269,9 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         )
     lines.append("Do not:")
     lines.extend(f"- {item}" for item in forbidden)
+    if plan.common_instructions:
+        lines.append("Instructions common to all roles:")
+        lines.append(plan.common_instructions.strip())
     if plan.role.instructions:
         lines.append("Role instructions:")
         lines.append(plan.role.instructions.strip())
@@ -197,6 +291,12 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
             "If you cannot run required verification or cannot supply its evidence, return "
             "unverified instead of completed and state what could not be verified in blockers."
         )
+    lines.append(
+        "Each blocker is an object with a reason and a text. The reason is "
+        "environment when a tool, host or sandbox failure prevented the work or check, "
+        "and not_done when planned work or verification is unfinished. "
+        "A check the packet prohibits is not a blocker; report it in observed_facts or report."
+    )
     lines.append("")
     # Only one backend can be handed a schema, so the shape is stated here for
     # all of them. Without it a worker invents its own and the run is wasted.
@@ -223,26 +323,19 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     return "\n".join(lines) + "\n"
 
 
-def _find_duplicate(
-    root: Path, key: str, session_id: str | None = None, *, fast: bool = False
-) -> dict[str, Any] | None:
+def _find_duplicate(root: Path, key: str, owner: Owner, *, fast: bool) -> dict[str, Any] | None:
     """The identical task that is still running, if there is one.
 
     Only a task still in flight counts. Matching finished ones too would answer a
     fresh question with an old answer, and the question is usually being asked
-    again because something has changed since.
+    again because something has changed since. The worker does not matter: the
+    request is the same on either arm of a comparison.
     """
-    if not root.exists():
-        return None
-    for path in sorted(root.glob("*/state.json"), reverse=True):
-        try:
-            state = store.read_json(path)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
+    for state in reversed(_all_states(root)):
         if (
             state.get("fingerprint") == key
             and state.get("status") in events.ACTIVE_STATES
-            and state.get("submitter_session_id") == session_id
+            and owner_of(state) == owner
             and state.get("fast", False) == fast
         ):
             return state
@@ -253,6 +346,7 @@ def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str,
     return {
         "task_id": state["task_id"],
         "project_root": state["project_root"],
+        "task_dir": state["task_dir"],
         "status": state["status"],
         "role": state["role"],
         "worker": state["worker"],
@@ -335,6 +429,61 @@ def _preflight(plan: config.Plan, binary: str) -> None:
         )
 
 
+def arm_for(task_id: str, arms: tuple[str, ...]) -> str:
+    """The comparison arm a task takes, by a stable hash of its id."""
+    return arms[hashlib.sha256(task_id.encode()).digest()[0] % len(arms)]
+
+
+def _candidates(
+    settings: config.Settings, role: str, worker: str | None, task_id: str
+) -> tuple[list[str | None], str | None]:
+    """The workers to try in order, and the route policy.
+
+    An explicit worker always wins. A role that compares two workers tries the
+    one its task id hashes to, then the other.
+    """
+    if worker is not None:
+        return [worker], "explicit"
+    role_def = settings.roles.get(role)
+    if role_def is None or not role_def.compare_workers:
+        return [None], None
+    first = arm_for(task_id, role_def.compare_workers)
+    return [first, *(arm for arm in role_def.compare_workers if arm != first)], "compare"
+
+
+def _runnable(
+    settings: config.Settings,
+    role: str,
+    worker: str | None,
+    fast: bool | None,
+    root: Path,
+    *,
+    allow_unhealthy: bool,
+) -> tuple[config.Plan, dict[str, Any] | None]:
+    """The plan for one worker and how its health was waived, or why it cannot run."""
+    plan = settings.plan(role, worker=worker, fast=fast)
+    override: dict[str, Any] | None = None
+    streak = unhealthy_streak(root, plan.worker)
+    if streak is not None:
+        failure_class, task_ids = streak
+        if not allow_unhealthy:
+            raise WorkerUnhealthy(
+                f"the last {UNHEALTHY_STREAK} tasks of {plan.worker} all failed with "
+                f"{failure_class} ({', '.join(task_ids)}); fix the worker, or pass "
+                "--allow-unhealthy to submit anyway",
+                worker=plan.worker,
+                failure_class=failure_class,
+                task_ids=task_ids,
+            )
+        override = {"failure_class": failure_class, "task_ids": task_ids}
+    try:
+        adapter = registry.get(plan.adapter)
+    except KeyError as error:
+        raise SubmitRefused(str(error)) from error
+    _preflight(plan, adapter.name)
+    return plan, override
+
+
 def submit(
     *,
     project_root: Path,
@@ -344,12 +493,51 @@ def submit(
     value: dict[str, Any],
     worker: str | None = None,
     fast: bool | None = None,
+    caller: Owner = ("session", None),
+    config_path: Path | None = None,
+    config_sha256: str | None = None,
+    ledger: Path | None = None,
+    allow_unhealthy: bool = False,
 ) -> dict[str, Any]:
+    """Create a task and start its worker.
+
+    ``caller`` is who submits: a ``("bridge", id)`` task answers only to that id
+    and no hook announces it. ``ledger`` is an absolute task root.
+    """
     packet_module.validate(value)
     if value["host_only"]:
         raise SubmitRefused("host_only work must stay in Claude Code", run_in="claude-code")
-
-    plan = settings.plan(role, worker=worker, fast=fast)
+    root = ledger if ledger is not None else task_root(project_root)
+    task_id = str(uuid.uuid4())
+    candidates, route_policy = _candidates(settings, role, worker, task_id)
+    key = fingerprint(project_root, role, title, value)
+    # An identical task still running is the answer, whatever the worker's health
+    # is now: asking again must not be refused for the worker that is doing it.
+    try:
+        first = settings.plan(role, worker=candidates[0], fast=fast)
+    except config.ConfigError:
+        pass
+    else:
+        running = _find_duplicate(
+            root,
+            key,
+            caller,
+            fast=first.fast,
+        )
+        if running is not None:
+            return handle_of(running, deduplicated=True)
+    failures: list[Exception] = []
+    for candidate in candidates:
+        try:
+            plan, override = _runnable(
+                settings, role, candidate, fast, root, allow_unhealthy=allow_unhealthy
+            )
+            break
+        except (SubmitRefused, config.ConfigError) as error:
+            failures.append(error)
+    else:
+        raise failures[0]
+    route_arm = plan.worker if route_policy == "compare" else None
     escalation_reason = value.get("escalation_reason")
     if plan.role.allowed_escalation_reasons:
         if escalation_reason is None:
@@ -372,35 +560,33 @@ def submit(
             "allowed_writes must contain canonical repository-relative paths",
             invalid_allowed_writes=invalid_writes,
         )
-    denied_reads = _denied_reads(project_root, value["read"], plan.denied_read_paths)
+    denied_reads = _denied_reads(
+        project_root, [*value["read"], *value.get("read_optional", [])], plan.denied_read_paths
+    )
     if denied_reads:
         raise SubmitRefused(
             "packet reads overlap denied_read_paths",
             denied_reads=denied_reads,
         )
     if plan.role.repo_local_reads:
-        invalid_reads = _invalid_scoped_reads(value["read"], plan.role)
+        invalid_reads = _invalid_scoped_reads(
+            [*value["read"], *value.get("read_optional", [])], plan.role
+        )
         if invalid_reads:
             raise SubmitRefused(
                 f"role {role} accepts repository-local reads only, "
                 "plus configured allowed_read_roots",
                 invalid_reads=invalid_reads,
             )
-    try:
-        adapter = registry.get(plan.adapter)
-    except KeyError as error:
-        raise SubmitRefused(str(error)) from error
-    _preflight(plan, adapter.name)
+    missing_reads = packet_module.missing_reads(value, project_root)
+    if missing_reads:
+        raise SubmitRefused(
+            "packet reads do not exist; paths whose existence is itself the question, "
+            "or that the worker will create, belong in read_optional",
+            missing_reads=missing_reads,
+        )
 
-    root = task_root(project_root)
     root.mkdir(parents=True, exist_ok=True)
-    key = fingerprint(project_root, role, title, value)
-    submitter_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID") or None
-    duplicate = _find_duplicate(root, key, submitter_session_id, fast=plan.fast)
-    if duplicate is not None:
-        return handle_of(duplicate, deduplicated=True)
-
-    task_id = str(uuid.uuid4())
     task_dir = root / task_id
     task_dir.mkdir(mode=0o700)
     created = events.now_iso()
@@ -411,9 +597,15 @@ def submit(
         "created_at": created,
         "updated_at": created,
         "project_root": str(project_root),
+        "task_root": str(root),
+        "config_path": str(config_path) if config_path is not None else None,
+        "config_sha256": config_sha256,
         "role": role,
         "title": title,
         "worker": plan.worker,
+        "route_arm": route_arm,
+        "route_policy": route_policy,
+        "unhealthy_override": override,
         "adapter": plan.adapter,
         "model": plan.model,
         "effort": plan.effort,
@@ -434,7 +626,10 @@ def submit(
         "resume_results": [],
         "pid": None,
         "session_id": None,
-        "submitter_session_id": submitter_session_id,
+        "submitter_session_id": caller[1] if caller[0] == "session" else None,
+        "owner_kind": caller[0],
+        "owner_id": caller[1],
+        "delivered_to": None,
         "exit_code": None,
         "terminal_reason": None,
         "failure_class": None,
@@ -459,7 +654,7 @@ def submit(
     (task_dir / "prompt.md").write_text(compose_prompt(project_root, plan, value), encoding="utf-8")
     store.write_json(task_dir / "state.json", state)
     state = events.emit(task_dir, "starting")
-    register_completion_watch(project_root, task_id, submitter_session_id)
+    register_completion_watch(task_dir, state["submitter_session_id"])
 
     try:
         worker_process = subprocess.Popen(

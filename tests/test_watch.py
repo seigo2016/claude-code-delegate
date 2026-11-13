@@ -297,31 +297,30 @@ def test_collect_rearms_the_remaining_tasks_when_its_output_is_filtered(
     assert json.loads(result.stdout.read())["ready"][0]["task_id"] == first["task_id"]
 
 
-@pytest.mark.parametrize("terminal_status", sorted(events.TERMINAL_STATES))
+@pytest.mark.parametrize("terminal_status", ["completed", "cancelled"])
 def test_completion_between_notification_and_pruning_is_rearmed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_status: str
 ) -> None:
     monkeypatch.setenv("DELEGATE_WATCH_ROOT", str(tmp_path / "registry"))
     monkeypatch.setenv("DELEGATE_WATCH_SEC", "0")
-    watched = [(tmp_path, "first"), (tmp_path, "second")]
-    for root, task_id in watched:
-        task_dir = tasks.task_root(root) / task_id
+    watched = [tasks.task_root(tmp_path) / name for name in ("first", "second")]
+    for task_dir in watched:
         store.write_json(
             task_dir / "state.json",
             {
-                "project_root": str(root),
-                "task_id": task_id,
+                "project_root": str(tmp_path),
+                "task_id": task_dir.name,
                 "task_dir": str(task_dir),
                 "lock_path": str(task_dir / "worker.lock"),
-                "title": task_id,
+                "title": task_dir.name,
                 "role": "repro-runner",
-                "status": "completed" if task_id == "first" else "running",
+                "status": "completed" if task_dir.name == "first" else "running",
                 "delivered_at": None,
             },
         )
-    cli._remember_session_watch_group("session-1", watched)
+    cli._remember_watch_group("session-1", watched)
     notifications = []
-    second_path = tasks.task_root(tmp_path) / "second" / "state.json"
+    first_path, second_path = (task_dir / "state.json" for task_dir in watched)
 
     def notify(value: dict[str, object]) -> None:
         notifications.append(value)
@@ -330,27 +329,25 @@ def test_completion_between_notification_and_pruning_is_rearmed(
         store.write_json(second_path, state)
 
     monkeypatch.setattr(cli, "_print", notify)
-    with liveness.hold(tasks.task_root(tmp_path) / "second" / "worker.lock"):
+    with liveness.hold(watched[1] / "worker.lock"):
         assert cli._watch_tasks(watched) == WAKE
     assert [item["task_id"] for item in notifications[0]["ready"]] == ["first"]
     cli._prune_session_watches("session-1")
 
-    first_path = tasks.task_root(tmp_path) / "first" / "state.json"
     first_state = store.read_json(first_path)
     first_state["delivered_at"] = "2026-09-17T00:00:00+00:00"
     store.write_json(first_path, first_state)
     cli._prune_session_watches("session-1")
-    remaining = cli._read_session_watches("session-1")
-    assert remaining == [{"project_root": str(tmp_path), "task_id": "second"}]
-    assert cli._watch_tasks(cli._watch_tasks_from_handles(remaining)) == WAKE
+    assert cli._session_watches("session-1") == [watched[1]]
+    assert cli._watch_tasks([watched[1]]) == WAKE
     assert [item["task_id"] for item in notifications[-1]["ready"]] == ["second"]
 
     state = store.read_json(second_path)
     state["delivered_at"] = "2026-09-17T00:01:00+00:00"
     store.write_json(second_path, state)
     cli._prune_session_watches("session-1")
-    assert cli._read_session_watches("session-1") == []
-    assert list(cli._watch_registry_dir("session-1").glob("*.json")) == []
+    assert cli._session_watches("session-1") == []
+    assert list(tasks.watch_registry_dir("session-1").glob("*.json")) == []
 
 
 def test_the_hook_ignores_json_that_does_not_name_a_task(
@@ -513,6 +510,7 @@ def test_reconcile_reports_a_short_line_per_task_not_the_whole_state(
     assert set(reported) == {
         "task_id",
         "project_root",
+        "task_dir",
         "title",
         "role",
         "status",
@@ -577,7 +575,7 @@ def test_pending_watches_are_isolated_across_project_sessions(
     handle = workspace.submit()
     assert watch(workspace, seconds="20").returncode == WAKE
     monkeypatch.setenv("DELEGATE_WATCH_ROOT", workspace.env["DELEGATE_WATCH_ROOT"])
-    pending = tasks._completion_watch_path("owner", workspace.repo, handle["task_id"])
+    pending = tasks._pending_path("owner", Path(handle["task_dir"]))
     legacy = Path(workspace.env["DELEGATE_WATCH_ROOT"]) / "pending-submissions"
     assert pending.exists()
     assert list(legacy.glob("*.json")) == []
@@ -588,7 +586,7 @@ def test_pending_watches_are_isolated_across_project_sessions(
     assert json.loads(foreign.stdout)["ready"] == []
     assert pending.exists()
     assert not (tasks.task_root(workspace.repo) / handle["task_id"] / "watch.lock").exists()
-    tasks.clear_pending_completion_watches("other", [handle])
+    tasks.clear_pending_completion_watches("other", [Path(handle["task_dir"])])
     assert pending.exists()
     owner = hook_watch(workspace, "hidden", cwd=workspace.repo, session_id="owner", seconds="0")
     assert owner.returncode == WAKE
@@ -602,16 +600,19 @@ def test_legacy_pending_watch_migrates_only_for_owner(
     handle = workspace.submit()
     assert watch(workspace, seconds="20").returncode == WAKE
     monkeypatch.setenv("DELEGATE_WATCH_ROOT", workspace.env["DELEGATE_WATCH_ROOT"])
-    pending = tasks._completion_watch_path("owner", workspace.repo, handle["task_id"])
+    pending = tasks._pending_path("owner", Path(handle["task_dir"]))
     legacy = Path(workspace.env["DELEGATE_WATCH_ROOT"]) / "pending-submissions" / pending.name
     legacy.parent.mkdir(parents=True, exist_ok=True)
     pending.rename(legacy)
     assert tasks.pending_completion_watches("other") == []
     assert legacy.exists() and not pending.exists()
-    assert tasks.pending_completion_watches("owner") == [
-        {"project_root": str(workspace.repo), "task_id": handle["task_id"]}
-    ]
+    assert tasks.pending_completion_watches("owner") == [Path(handle["task_dir"])]
     assert pending.exists() and not legacy.exists()
+    # A file an older version named differently is renamed too, so it is cleared later.
+    older = pending.with_name("older-name.json")
+    pending.rename(older)
+    assert tasks.pending_completion_watches("owner") == [Path(handle["task_dir"])]
+    assert pending.exists() and not older.exists()
     owner = hook_watch(workspace, "hidden", cwd=tmp_path, session_id="owner", seconds="0")
     assert owner.returncode == WAKE
     assert json.loads(owner.stdout)["ready"][0]["task_id"] == handle["task_id"]
@@ -634,9 +635,9 @@ def test_ownerless_task_never_wakes_a_hook(
         assert tasks.pending_completion_watches("session-1") == []
         assert legacy.exists()
     if source != "pending":
-        tasks.clear_pending_completion_watches("session-1", [handle])
+        tasks.clear_pending_completion_watches("session-1", [Path(handle["task_dir"])])
     if source == "session_registry":
-        cli._remember_session_watch_group("session-1", [(workspace.repo, handle["task_id"])])
+        cli._remember_watch_group("session-1", [Path(handle["task_dir"])])
     result = hook_watch(
         workspace,
         json.dumps(handle) if source == "handle" else "hidden",

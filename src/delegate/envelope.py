@@ -7,6 +7,7 @@ glance has moved the cost back into the session that delegated it.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 MAX_ITEMS = 5
@@ -18,9 +19,71 @@ MAX_COUNT_NAME_CHARS = 120
 MAX_REMAINING = 10
 MAX_REMAINING_CHARS = 200
 EVIDENCE_FIELDS = ("observed_facts", "verified_comparisons", "artifact_paths", "blockers")
+#: Why a blocker is there. ``not_done`` says work or verification is unfinished, so
+#: it is also what a legacy string or an unrecognised reason becomes.
+BLOCKER_REASONS = ("environment", "not_done")
+UNFINISHED = "not_done"
 FIELDS = ("status", *EVIDENCE_FIELDS, "decision_needed")
 OPTIONAL_FIELDS = ("report", "counts", "coverage")
 STATUSES = ("completed", "decision_needed", "unverified")
+
+
+def normalize_blocker(item: Any) -> Any:
+    """A blocker as ``{reason, text}``; a bare string (legacy) is ``not_done``.
+
+    Anything that is not a string or an object with a string ``text`` is returned
+    unchanged so that ``violations`` reports it.
+    """
+    if isinstance(item, str):
+        return {"reason": UNFINISHED, "text": item}
+    if isinstance(item, dict) and isinstance(item.get("text"), str):
+        reason = item.get("reason")
+        return {"reason": reason if reason in BLOCKER_REASONS else UNFINISHED, "text": item["text"]}
+    return item
+
+
+def _is_unfinished(item: Any) -> bool:
+    return isinstance(item, dict) and item.get("reason") == UNFINISHED
+
+
+@dataclass(frozen=True)
+class Judgement:
+    """How a run ended, decided from the worker's raw answer alone."""
+
+    result: dict[str, Any] | None
+    #: The task's terminal status; ``failed`` when the answer cannot be delivered.
+    status: str
+    terminal_reason: str
+    #: Write work the worker admits is unfinished: resume it, or fail at the limit.
+    needs_resume: bool = False
+    problems: tuple[str, ...] = ()
+
+
+def judge(raw: Any, *, writes_allowed: bool) -> Judgement:
+    """Every terminal decision about a worker's answer, in one place.
+
+    ``completed`` with a ``not_done`` blocker is unfinished work: a write-capable
+    role resumes it (``needs_resume``), a read-only role ends ``unverified``.
+    ``completed`` with only ``environment`` blockers ends ``unverified`` for every
+    role, as resuming in the same environment would fail again. Other statuses stand.
+    """
+    if raw is None:
+        return Judgement(None, "failed", "empty_result")
+    result = sanitize(raw, writes_allowed=writes_allowed)
+    problems = violations(result, writes_allowed=writes_allowed)
+    if problems:
+        return Judgement(result, "failed", "invalid_result", problems=tuple(problems))
+    declared = result["status"]
+    reasons = {item["reason"] for item in result["blockers"]}
+    if writes_allowed and (
+        (declared in {"completed", "unverified"} and result.get("work_complete") is False)
+        or (declared == "completed" and UNFINISHED in reasons)
+    ):
+        return Judgement(result, "failed", "incomplete_work", needs_resume=True)
+    if declared == "completed" and reasons:
+        reason = "normal_exit" if UNFINISHED in reasons else "environment_blocked"
+        return Judgement({**result, "status": "unverified"}, "unverified", reason)
+    return Judgement(result, declared, "normal_exit")
 
 
 def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
@@ -32,6 +95,7 @@ def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
     - Evidence lists exceeding MAX_ITEMS (truncated to MAX_ITEMS)
     - Extraneous metadata keys (e.g. toolAction, toolSummary, reasoning)
     - Missing 'decision_needed' or 'blockers' when status is 'completed'
+    - Blocker reasons that are unknown (see ``normalize_blocker``)
     """
     if not isinstance(result, dict):
         return result
@@ -46,6 +110,8 @@ def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
     for field in EVIDENCE_FIELDS:
         if field in result:
             cleaned[field] = result[field]
+            if field == "blockers" and isinstance(cleaned[field], list):
+                cleaned[field] = [normalize_blocker(item) for item in cleaned[field]]
         elif field == "blockers" and result.get("status") == "completed":
             cleaned["blockers"] = []
     cleaned = chair_display(cleaned)
@@ -59,8 +125,11 @@ def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
         if cleaned.get("status") == "completed":
             cleaned["status"] = "unverified"
         note = "Legacy result: work completion is unknown."
-        if isinstance(cleaned.get("blockers"), list) and note not in cleaned["blockers"]:
-            cleaned["blockers"] = [*cleaned["blockers"][: MAX_ITEMS - 1], note]
+        blockers = cleaned.get("blockers")
+        if isinstance(blockers, list) and not any(
+            isinstance(item, dict) and item.get("text") == note for item in blockers
+        ):
+            cleaned["blockers"] = [*blockers[: MAX_ITEMS - 1], normalize_blocker(note)]
 
     for field in OPTIONAL_FIELDS:
         cleaned[field] = result.get(field)
@@ -72,17 +141,23 @@ def chair_display(result: dict[str, Any]) -> dict[str, Any]:
     result = result.copy()
     for field in EVIDENCE_FIELDS:
         value = result.get(field)
+        if field == "blockers" and isinstance(value, list):
+            # Unfinished work decides the status, so it must survive the cut.
+            value = sorted(
+                (normalize_blocker(item) for item in value),
+                key=lambda item: not _is_unfinished(item),
+            )
         if isinstance(value, list):
-            result[field] = [
-                item[: MAX_ITEM_CHARS - 3] + "..."
-                if isinstance(item, str) and len(item) > MAX_ITEM_CHARS
-                else item
-                for item in value[:MAX_ITEMS]
-            ]
+            result[field] = [_shortened(item) for item in value[:MAX_ITEMS]]
     counts = result.get("counts")
     if isinstance(counts, list):
+        # A result that failed validation can still reach here; shorten what has
+        # the expected shape and pass anything else through untouched.
         result["counts"] = [
-            {**item, "name": item["name"][:MAX_COUNT_NAME_CHARS]} for item in counts[:MAX_COUNTS]
+            {**item, "name": item["name"][:MAX_COUNT_NAME_CHARS]}
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+            else item
+            for item in counts[:MAX_COUNTS]
         ]
         result["counts_dropped"] = max(0, len(counts) - MAX_COUNTS)
     coverage = result.get("coverage")
@@ -90,19 +165,21 @@ def chair_display(result: dict[str, Any]) -> dict[str, Any]:
         remaining = coverage["remaining"]
         result["coverage"] = {
             **coverage,
-            "remaining": [item[:MAX_REMAINING_CHARS] for item in remaining[:MAX_REMAINING]],
+            "remaining": [
+                item[:MAX_REMAINING_CHARS] if isinstance(item, str) else item
+                for item in remaining[:MAX_REMAINING]
+            ],
             "remaining_dropped": max(0, len(remaining) - MAX_REMAINING),
         }
     return result
 
 
-def incomplete_write_work(result: dict[str, Any], *, writes_allowed: bool) -> bool:
-    """Identify explicitly unfinished write work; legacy unknown remains distinct."""
-    return (
-        writes_allowed
-        and result.get("status") in {"completed", "unverified"}
-        and result.get("work_complete") is False
-    )
+def _shortened(item: Any) -> Any:
+    if isinstance(item, str) and len(item) > MAX_ITEM_CHARS:
+        return item[: MAX_ITEM_CHARS - 3] + "..."
+    if isinstance(item, dict) and isinstance(item.get("text"), str):
+        return {**item, "text": _shortened(item["text"])}
+    return item
 
 
 def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
@@ -131,11 +208,26 @@ def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
         problems.append("work_complete must be a boolean")
     for field in EVIDENCE_FIELDS:
         value = result[field]
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            problems.append(f"{field} must be an array of strings")
-        elif len(value) > MAX_ITEMS:
+        if field == "blockers":
+            well_formed = isinstance(value, list) and all(
+                isinstance(item, dict)
+                and set(item) == {"reason", "text"}
+                and item["reason"] in BLOCKER_REASONS
+                and isinstance(item["text"], str)
+                for item in value
+            )
+            if not well_formed:
+                problems.append("blockers must be an array of {reason, text} objects")
+                continue
+            texts = [item["text"] for item in value]
+        else:
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                problems.append(f"{field} must be an array of strings")
+                continue
+            texts = value
+        if len(value) > MAX_ITEMS:
             problems.append(f"{field} holds more than {MAX_ITEMS} items")
-        elif any(len(item) > MAX_ITEM_CHARS for item in value):
+        elif any(len(text) > MAX_ITEM_CHARS for text in texts):
             problems.append(f"{field} holds an item longer than {MAX_ITEM_CHARS} characters")
 
     if result.get("report") is not None and not isinstance(result["report"], str):
@@ -240,6 +332,20 @@ def json_schema(*, writes_allowed: bool = False) -> dict[str, Any]:
                     "items": {"type": "string", "maxLength": 4000},
                 }
                 for field in EVIDENCE_FIELDS
+                if field != "blockers"
+            },
+            "blockers": {
+                "type": "array",
+                "maxItems": 200,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["reason", "text"],
+                    "properties": {
+                        "reason": {"type": "string", "enum": list(BLOCKER_REASONS)},
+                        "text": {"type": "string", "maxLength": 4000},
+                    },
+                },
             },
             "decision_needed": {"type": ["string", "null"]},
             "report": {"type": ["string", "null"]},

@@ -48,6 +48,12 @@ args = sys.argv[1:]
 mode = pathlib.Path(os.environ["FAKE_MODE"]).read_text().strip()
 pathlib.Path(os.environ["FAKE_CALLS"]).open("a").write(json.dumps(args) + "\n")
 
+if os.environ.get("FAKE_ENV_RECORD"):
+    pathlib.Path(os.environ["FAKE_ENV_RECORD"]).write_text(json.dumps({
+        "DELEGATE_WORKER": os.environ.get("DELEGATE_WORKER"),
+        "DELEGATE_PARENT_TASK": os.environ.get("DELEGATE_PARENT_TASK"),
+    }))
+
 result_path = None
 for i, arg in enumerate(args):
     if arg == "-o":
@@ -177,6 +183,11 @@ if mode in ("resume_success", "resume_limit", "resume_repeated"):
         good.update(status="unverified", work_complete=False,
                     blockers=["same" if mode == "resume_repeated" else f"blocker-{attempt}"])
 
+if mode == "scripted":
+    attempt = len(pathlib.Path(os.environ["FAKE_CALLS"]).read_text().splitlines()) - 1
+    script = json.loads(pathlib.Path(os.environ["FAKE_SCRIPT"]).read_text())
+    good.update(script[min(attempt, len(script) - 1)])
+
 event({"type": "item.completed",
        "item": {"id": "i-2", "type": "agent_message", "text": json.dumps(good)}})
 result_path.write_text(json.dumps(good))
@@ -236,6 +247,13 @@ class Workspace:
     def mode(self, value: str) -> None:
         self.mode_file.write_text(value, encoding="utf-8")
 
+    def script(self, *attempts: dict) -> None:
+        """Make the worker answer each attempt with these fields, the last one repeating."""
+        path = self.mode_file.parent / "script.json"
+        path.write_text(json.dumps(list(attempts)), encoding="utf-8")
+        self.env["FAKE_SCRIPT"] = str(path)
+        self.mode("scripted")
+
     def calls(self) -> list[list[str]]:
         if not self.calls_file.exists():
             return []
@@ -281,6 +299,9 @@ class Workspace:
 def workspace(tmp_path: Path) -> Workspace:
     repo = tmp_path / "repo"
     (repo / ".claude").mkdir(parents=True)
+    # Packets name these in `read`, and submit refuses a read that does not exist.
+    (repo / "tests").mkdir()
+    (repo / "README.md").write_text("readme\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     settings = repo / ".claude" / "delegate.toml"
     settings.write_text(SETTINGS, encoding="utf-8")

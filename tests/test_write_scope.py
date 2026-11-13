@@ -111,3 +111,46 @@ def test_a_repository_without_git_says_the_scope_was_not_checked(workspace: Work
 
     assert state["status"] == "completed"
     assert state["write_scope_checked"] is False
+
+
+def test_task_records_inside_the_project_are_not_the_workers_changes(
+    workspace: Workspace,
+) -> None:
+    ledger = workspace.repo / "delegate-records"
+    workspace.mode("writes_allowed")
+
+    handle = workspace.submit("--task-root", str(ledger), packet=SCOPED, role="bounded-implementer")
+    state = wait_for_terminal_in(workspace, handle["task_id"], ledger)
+
+    assert state["status"] == "completed"
+    assert state["write_scope_checked"] is True
+    assert state["unattributed_workspace_changes"] == []
+    assert state["unauthorized_writes"] == []
+
+
+def wait_for_terminal_in(workspace: Workspace, task_id: str, ledger: Path) -> dict:
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        state = workspace.run("status", task_id, "--task-root", str(ledger))
+        if state["status"] not in {"queued", "starting", "running", "cancellation_requested"}:
+            return state
+        time.sleep(0.05)
+    raise AssertionError(f"task {task_id} never finished")
+
+
+def test_changed_paths_leaves_out_the_ledger_it_is_told_about(tmp_path: Path) -> None:
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "ledger" / "t1").mkdir(parents=True)
+    (tmp_path / "ledger" / "t1" / "state.json").write_text("{}")
+    (tmp_path / "ledgers-sibling").mkdir()
+    (tmp_path / "ledgers-sibling" / "file.txt").write_text("x")
+    (tmp_path / "real.txt").write_text("x")
+
+    seen = workspace_state.changed_paths(tmp_path, ignored_roots=[tmp_path / "ledger"])
+
+    assert seen == {"ledgers-sibling/file.txt", "real.txt"}
+    # A root outside the project changes nothing.
+    outside = workspace_state.changed_paths(tmp_path, ignored_roots=[tmp_path.parent / "elsewhere"])
+    assert outside is not None and "ledger/t1/state.json" in outside

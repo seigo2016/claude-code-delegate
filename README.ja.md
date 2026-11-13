@@ -62,7 +62,11 @@ plugin を install しても、main agent は差し替わらず、tool も外れ
 
 `.claude/delegate.toml` の最上位に `temp_root = "/absolute/path"` を指定すると task の一時 directory をその配下に置きます。省略時は delegate cache 配下の `tmp` を使います。
 
+設定ファイルの最上位に `[common]` テーブルを置き、`instructions = """..."""` を書くと、その文章が全 task の prompt に 1 度だけ、「Instructions common to all roles」として role 自身の `instructions` より前に入ります。
+
 role が指定するのは level であり、model 名ではありません。その level が何を意味するかは worker 側が定義します。role には `preferred_worker` も指定できます。worker は `--worker`、role の `preferred_worker`、`default_worker` の順で選びます。選んだ worker がその level を定義していなければ、起動する前に拒否します。
+
+1 つの role を 2 つの worker で比べるには、role に `compare_workers = ["codex", "claude"]`（有効な（enabled の）worker で重複しない名前をちょうど 2 つ。設定の読み込み時に検査）を書きます。`--worker` がなければ、task は新しい task id の安定したハッシュ（SHA-256 の先頭 1 バイトを 2 で割った余り）が指す arm を取るので、数えたりロックしたりせずに 2 つの arm へ振り分けます。その arm の plan を作れない、binary がないなど submit 時の検査に通らない、または health が不調（後述）の場合は、もう一方の arm を使います。どちらも動かせないときだけ拒否し、その場合は最初の arm のエラーを返します。`state.json` には `route_arm`（実際に動く worker）と `route_policy`（`"compare"`、`--worker` を指定したときの `"explicit"`（この場合は比較より優先し、`route_arm` は付けません）、または null）を記録します。この role では `preferred_worker` より比較を優先します。同一の実行中 request は再起動せずそれを返します。判定は health 検査より先で、同じ arm の中だけです（比較の 2 つの arm は別々の実行だからです）。
 
 role に `allowed_escalation_reasons` を指定すると、packet はその一覧に含まれる `escalation_reason` を持つ必要があります。`requires_explicit_user_direction = true` を指定した role では、packet に `"user_directed": true` も必要です。どちらも監査のため task と一緒に記録します。`user_directed` は呼び出し側の申告であり、人が指示したことを証明する値ではありません。
 
@@ -94,6 +98,8 @@ task は Claude が組み立てます。何をするか、何を読んでよい�
   "user_directed": true
 }
 ```
+
+`read` は submit 時に検査されます。実在しない具体的な path(相対 path は project root から解決)があると submit は拒否され、足りない path が列挙され、task は作られません。`*`、`?`、`[` を含む entry と URL は検査しません。あれば読む、または worker 自身が作る path は任意の `read_optional` に書きます。検査されず、prompt には存在しないかもしれないものとして示されます。
 
 ## 返ってくる結果
 
@@ -128,6 +134,8 @@ patcher には \`requires_allowed_writes = true\`、auditor には \`forbids_all
 
 role が外部の書き込み root を許可し、packet に `allowed_writes` がある場合、worker は repository 内ではその repository-relative path だけ、外では宣言した root 配下だけに書き込めます。要求された検証を実行できない、または根拠を添えられない場合は、理由を `blockers` に書いて `unverified` を返し、collect はこれを `completed` と区別します。
 
+各 blocker は `{"reason", "text"}` です。`environment`(tool・host・sandbox の失敗)か `not_done`(予定した作業や検証が未完)のどちらかを取り、旧 worker の文字列や未知の reason は `not_done` として扱います。packet が禁じた確認は blocker ではなく、worker は `observed_facts` か `report` に書きます。`not_done` の blocker を持つ `completed` は完了とみなしません。読み取り専用の task は `unverified` で終わり、書き込み可能な task は `work_complete: false` と同じく `resume_limit` まで再開し、それでも残れば `failed` / `incomplete_work` になります。`environment` の blocker だけを持つ `completed` は、role を問わず `terminal_reason: environment_blocked` の `unverified` で終わります(書き込み可能な task も、同じ環境では再び失敗するため再開しません)。この判定は `envelope.judge` の 1 か所で行います。
+
 live な session state を必要とする作業や、事後承認では済まず人が下すべき判断には、Claude が `"host_only": true` を付けます。この場合 submit は送信せずに拒否します。packet に明示的に書く指定であり、内容を自動分類する機能ではありません。
 
 ## コマンド
@@ -137,15 +145,23 @@ skill と hook が実行します。人が直接使うのは診断のときだ�
 | コマンド | 用途 |
 |---|---|
 | `delegate submit --role R --title T --packet P` | worker を起動し handle を受け取る |
-| `delegate collect <task-id> --project-root ROOT` | 結果を 1 度だけ回収する |
+| `delegate collect <task-id> [--task-root DIR]` | 結果を 1 度だけ回収する |
 | `delegate status <task-id>` | 明示的な診断。待機ループには使わない |
 | `delegate cancel <task-id>` | 誤った task や暴走した task を止める |
 | `delegate reconcile` | worker が消えた task を分類する |
 | `delegate watch` | hook が実行する。回収できるものを待つ |
 
-`submit` は `--worker <name>` で backend を task ごとに上書きできます。全コマンドが `--project-root` を受け取ります。submit handle と完了通知にも正規化済みの root が含まれるため、cross-repository task は submit 時と同じ ledger から回収されます。1 回の Bash 呼び出しで複数の独立 task を submit しても、hook は返された全 handle を追跡します。1 件を collect した後は、同じ呼び出しの未回収 task に対して再び待機します。
+`submit` は `--worker <name>` で backend を task ごとに上書きできます。全コマンドが `--project-root` を受け取ります。worker は Chair ではありません。runner は全 worker を `DELEGATE_WORKER=1` と `DELEGATE_PARENT_TASK=<task_id>` 付きで起動し、prompt でも repository の指示に関わらず委譲しないよう伝え、`DELEGATE_WORKER` が設定された環境での `delegate submit` は `nested_submit`（exit 6）で拒否します。壊れた worker には仕事を送り続けません。submit は選んだ worker について、task root にある終了済み task のうち新しい 3 件（`terminal_at` 順）を見て、3 件とも同じ worker 起因の class で `failed` なら、worker 名、class、3 件の task id、`--allow-unhealthy` を示して `worker_unhealthy`（exit 7）で拒否します。worker 起因とみなす class は `auth_failed`（adapter が報告する 401/403、認証エラー、`api_key` 系の code）、`launch_error`、`supervisor_error` です（後ろの 2 つは `failure_class` が例外名なので `terminal_reason` で照合）。task 側の原因や、再試行で通る可能性があるものは除いています: `worker_api_error`、`provider_capacity`、timeout 系、`nonzero_exit`、`empty_result`、`invalid_result`、`incomplete_work`、`write_scope_violation`。3 件の間に別の結果が挟まる場合や 3 件に満たない場合は止めないので、成功が 1 件あれば連続失敗は自然に途切れます。`--allow-unhealthy` を付けると送信でき、`state.json` に `unhealthy_override` を残します。`compare_workers` のある role では、選んだ arm が不調でもう一方が不調でなければそちらを使い、`--allow-unhealthy` では選んだ arm のまま送ります。`--worker` で名指しした worker は替えません。
+
+エラーはすべて `{"error": <名前>, "reason": <文>}` と詳細として出力し、終了コードは 1 つの表（`delegate/errors.py`）で決まります。1 が `no_settings`、`invalid_config`、`invalid_packet`、`submit_refused`、`task_not_found`、2 は `WAKE`（エラーではない）、3 が `already_delivered`、4 が `task_not_terminal`、5 が `owner_mismatch`、6 が `nested_submit`、7 が `worker_unhealthy` です。
+
+設定ファイルと task の記録は project root の外に置けます。相対パスの `--config` / `--task-root` はカレントディレクトリ基準で解決し、絶対パスで記録します。project 内に置いた task root は write-scope の判定で worker の変更に数えません。`submit --config <path>` は `<project-root>/.claude/delegate.toml` の代わりにそのファイルを読み、`--task-root <path>`（`submit`、`status`、`collect`、`cancel`、`reconcile`、`watch`）は task の記録を `<project-root>/.claude/logs/delegate/` の代わりにそこへ置きます。worker は従来どおり project root を作業ディレクトリとして動きます。`state.json` には task ごとに `config_path`（絶対パス）、読み込んだ設定ファイルのバイト列の `config_sha256`、`task_root` を記録します。handle、完了通知、`reconcile` の各行は task の絶対パス `task_dir` を持ちます。hook、session ごとの registry、`watch-group.json` はこのパスだけを記録するので、task はどこに置かれていても追跡できます（`project_root` と `task_id` を持つ旧版の項目は、従来どおり既定の root を指します）。回収するときは `--task-root` に `task_dir` の親を渡してください。ディレクトリが存在しない、または読めない watch の項目は、エラーにせず読み飛ばします。1 回の Bash 呼び出しで複数の独立 task を submit しても、hook は返された全 handle を追跡します。1 件を collect した後は、同じ呼び出しの未回収 task に対して再び待機します。
 
 Claude Code が `CLAUDE_CODE_SESSION_ID` を提供する場合、submit はその ID を記録し、hook は同じ session の task だけを報告します。ID がない以前の task や submit は従来どおり共有されます。手動の `watch`、`reconcile`、`collect` は project 全体を対象とする診断用コマンドです。
+
+`submit --owner <id>` を付けると bridge 所有の task になります。`owner_kind` は `bridge`、session は記録されず、どの hook も通知しません。同じ `--owner` を付けた `collect` と `cancel` だけが操作でき、それ以外は `owner_mismatch`(終了コード 5)になります。session 所有の task(既定。owner 導入前の task を含む)は従来どおりどの session からも回収できますが、bridge owner からは回収できません。`collect` は受け取った相手を `delivered_to`(`{kind, id}`)に記録し、並行した collect のうち成功するのは 1 つだけで、残りは `already_delivered`(終了コード 3)になります。
+
+owner は `--owner` フラグだけで決まり、環境変数では設定できません。worker の環境からは `CLAUDE_CODE_SESSION_ID` を取り除きます。owner の確認は session と bridge の間の取り違えを防ぐためのもので、認証ではありません(owner id は task の state に平文で保存されます)。
 
 ## 検出の範囲
 

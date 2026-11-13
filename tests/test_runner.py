@@ -24,7 +24,7 @@ def test_write_completed_requires_known_complete(workspace: Workspace, legacy: b
         assert state["status"] == "unverified"
         result = workspace.run("collect", handle["task_id"])["result"]
         assert result["work_complete"] is None
-        assert "unknown" in result["blockers"][-1]
+        assert "unknown" in result["blockers"][-1]["text"]
     else:
         assert state["status"] == "failed"
         assert state["failure_class"] == "incomplete_work"

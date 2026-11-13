@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from delegate import envelope
 
 
@@ -31,7 +33,12 @@ def test_an_unverified_result_is_accepted_as_distinct_from_completed() -> None:
     unverified = {
         **valid(),
         "status": "unverified",
-        "blockers": ["pytest could not run because the dependency is unavailable"],
+        "blockers": [
+            {
+                "reason": "environment",
+                "text": "pytest could not run because the dependency is unavailable",
+            }
+        ],
     }
 
     assert envelope.violations(unverified) == []
@@ -185,7 +192,7 @@ def test_legacy_write_result_has_unknown_completion_and_blocker() -> None:
     result = envelope.sanitize(valid(), writes_allowed=True)
     assert result["work_complete"] is None
     assert result["status"] == "unverified"
-    assert "unknown" in result["blockers"][-1]
+    assert "unknown" in result["blockers"][-1]["text"]
     assert envelope.violations(result, writes_allowed=True) == []
 
 
@@ -193,3 +200,146 @@ def test_unknown_completion_cannot_be_reported_completed() -> None:
     result = envelope.sanitize({**valid(), "work_complete": None}, writes_allowed=True)
     assert result["status"] == "unverified"
     assert envelope.sanitize(result, writes_allowed=True) == result
+
+
+def blocker(reason: str, text: str = "x") -> dict[str, str]:
+    return {"reason": reason, "text": text}
+
+
+def test_legacy_string_blockers_become_not_done() -> None:
+    cleaned = envelope.sanitize({**valid(), "blockers": ["could not run pytest"]})
+    assert cleaned["blockers"] == [blocker("not_done", "could not run pytest")]
+    assert envelope.violations(cleaned) == []
+
+
+def test_an_unknown_or_missing_reason_is_not_done_never_more_lenient() -> None:
+    cleaned = envelope.sanitize(
+        {**valid(), "blockers": [{"reason": "whatever", "text": "a"}, {"text": "b"}]}
+    )
+    assert [b["reason"] for b in cleaned["blockers"]] == ["not_done", "not_done"]
+
+
+def test_known_reasons_are_kept() -> None:
+    blockers = [blocker(reason) for reason in envelope.BLOCKER_REASONS]
+    cleaned = envelope.sanitize({**valid(), "blockers": blockers})
+    assert sorted(cleaned["blockers"], key=str) == sorted(blockers, key=str)
+    assert envelope.violations(cleaned) == []
+
+
+def test_the_removed_forbidden_by_packet_reason_is_not_done() -> None:
+    raw = {"reason": "forbidden_by_packet", "text": "t", "forbidden_item": "editing config"}
+    cleaned = envelope.sanitize({**valid(), "blockers": [raw]})
+    assert cleaned["blockers"] == [blocker("not_done", "t")]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "plain string",
+        {"reason": "nope", "text": "x"},
+        {"reason": "environment"},
+        {"reason": "environment", "text": 3},
+        {"reason": "environment", "text": "x", "extra": 1},
+    ],
+)
+def test_malformed_blockers_are_violations(bad: object) -> None:
+    assert envelope.violations({**valid(), "blockers": [bad]}) == [
+        "blockers must be an array of {reason, text} objects"
+    ]
+
+
+def test_chair_display_truncates_blocker_text_and_keeps_the_reason() -> None:
+    long = blocker("environment", "z" * 500)
+    shown = envelope.chair_display({**valid(), "blockers": [long]})["blockers"][0]
+    assert shown["reason"] == "environment"
+    assert len(shown["text"]) == envelope.MAX_ITEM_CHARS and shown["text"].endswith("...")
+
+
+def test_truncation_never_drops_a_not_done_blocker_behind_other_reasons() -> None:
+    blockers = [blocker("environment", str(i)) for i in range(7)] + [blocker("not_done", "last")]
+    cleaned = envelope.sanitize({**valid(), "blockers": blockers})
+    assert len(cleaned["blockers"]) == envelope.MAX_ITEMS
+    assert blocker("not_done", "last") in cleaned["blockers"]
+
+
+def test_schema_describes_blockers_as_reasoned_objects() -> None:
+    items = envelope.json_schema()["properties"]["blockers"]["items"]
+    assert items["additionalProperties"] is False
+    assert items["required"] == ["reason", "text"]
+    assert items["properties"]["reason"]["enum"] == ["environment", "not_done"]
+
+
+#: (status, work_complete, blocker reasons, writes_allowed) -> (status, terminal_reason, resume)
+JUDGEMENTS = [
+    ("completed", True, [], True, ("completed", "normal_exit", False)),
+    ("completed", True, [], False, ("completed", "normal_exit", False)),
+    ("completed", True, ["not_done"], True, ("failed", "incomplete_work", True)),
+    ("completed", True, ["not_done", "environment"], True, ("failed", "incomplete_work", True)),
+    ("completed", True, ["environment"], True, ("unverified", "environment_blocked", False)),
+    ("completed", False, [], True, ("failed", "incomplete_work", True)),
+    ("unverified", False, [], True, ("failed", "incomplete_work", True)),
+    ("unverified", True, ["not_done"], True, ("unverified", "normal_exit", False)),
+    ("decision_needed", True, ["not_done"], True, ("decision_needed", "normal_exit", False)),
+    ("completed", True, ["not_done"], False, ("unverified", "normal_exit", False)),
+    ("completed", True, ["not_done", "environment"], False, ("unverified", "normal_exit", False)),
+    ("completed", True, ["environment"], False, ("unverified", "environment_blocked", False)),
+    ("unverified", True, ["environment"], False, ("unverified", "normal_exit", False)),
+]
+
+
+@pytest.mark.parametrize(("status", "work_complete", "reasons", "writes", "expected"), JUDGEMENTS)
+def test_judge_decides_every_terminal_outcome_from_the_blockers(
+    status: str,
+    work_complete: bool,
+    reasons: list[str],
+    writes: bool,
+    expected: tuple[str, str, bool],
+) -> None:
+    raw = {
+        **valid(),
+        "status": status,
+        "work_complete": work_complete,
+        "decision_needed": "q" if status == "decision_needed" else None,
+        "blockers": [blocker(reason) for reason in reasons],
+    }
+    judgement = envelope.judge(raw, writes_allowed=writes)
+    assert (judgement.status, judgement.terminal_reason, judgement.needs_resume) == expected
+    if judgement.status != "failed":
+        assert judgement.result is not None and judgement.result["status"] == judgement.status
+
+
+def test_a_legacy_forbidden_by_packet_blocker_still_counts_as_unfinished() -> None:
+    raw = {**valid(), "blockers": [{"reason": "forbidden_by_packet", "text": "t"}]}
+    assert envelope.judge(raw, writes_allowed=False).status == "unverified"
+    assert envelope.judge({**raw, "work_complete": True}, writes_allowed=True).needs_resume
+
+
+def test_judge_reports_an_absent_or_broken_answer() -> None:
+    assert envelope.judge(None, writes_allowed=False).terminal_reason == "empty_result"
+    broken = envelope.judge({"status": "completed"}, writes_allowed=False)
+    assert (broken.status, broken.terminal_reason) == ("failed", "invalid_result")
+    assert broken.problems
+
+
+@pytest.mark.parametrize("bad", [{"type": "x", "message": "y"}, {"text": 5}, 5, None, [1]])
+def test_non_conforming_blockers_never_raise_and_are_violations(bad: object) -> None:
+    cleaned = envelope.sanitize({**valid(), "blockers": [bad]}, writes_allowed=True)
+    assert envelope.violations(cleaned, writes_allowed=True)
+    assert envelope.chair_display(cleaned)
+
+
+def test_chair_display_does_not_crash_on_malformed_counts_or_coverage() -> None:
+    base = {
+        "status": "completed",
+        "observed_facts": [],
+        "verified_comparisons": [],
+        "artifact_paths": [],
+        "blockers": [],
+        "decision_needed": [],
+    }
+    for extra in (
+        {"counts": [1, {"count": 2}, {"name": 3}]},
+        {"coverage": {"done": 1, "total": 2, "remaining": [{"x": 1}, 5]}},
+    ):
+        shown = envelope.chair_display({**base, **extra})
+        assert shown["status"] == "completed"

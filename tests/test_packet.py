@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -43,3 +44,36 @@ def test_escalation_reason_must_be_a_nonempty_string_when_present() -> None:
 def test_user_directed_must_be_a_boolean_when_present() -> None:
     with pytest.raises(ValueError, match="user_directed"):
         packet.validate({**valid(), "user_directed": "true"})
+
+
+def test_read_optional_must_hold_strings() -> None:
+    with pytest.raises(ValueError, match="read_optional must be an array of strings"):
+        packet.validate({**valid(), "read_optional": [1]})
+    assert packet.validate({**valid(), "read_optional": ["out/new.md"]})
+
+
+def test_missing_reads_lists_concrete_paths_that_do_not_exist(tmp_path: Path) -> None:
+    (tmp_path / "here.md").write_text("x")
+    (tmp_path / "dir").mkdir()
+    absolute_missing = str(tmp_path / "nope-abs")
+    value = {
+        **valid(),
+        "read": ["here.md", "dir", "gone.md", absolute_missing, str(tmp_path / "here.md")],
+    }
+
+    assert packet.missing_reads(value, tmp_path) == ["gone.md", absolute_missing]
+
+
+@pytest.mark.parametrize("entry", ["src/*.py", "docs/**/x.md", "a?.md", "[ab].md"])
+def test_missing_reads_skips_globs(tmp_path: Path, entry: str) -> None:
+    assert packet.missing_reads({**valid(), "read": [entry]}, tmp_path) == []
+
+
+def test_missing_reads_ignores_urls_and_read_optional(tmp_path: Path) -> None:
+    value = {**valid(), "read": ["https://example.test/x"], "read_optional": ["not/yet.md"]}
+    assert packet.missing_reads(value, tmp_path) == []
+
+
+def test_missing_reads_reports_an_entry_that_cannot_be_expanded(tmp_path: Path) -> None:
+    value = {**valid(), "read": ["~nosuchuser-zz/x.md"]}
+    assert packet.missing_reads(value, tmp_path) == ["~nosuchuser-zz/x.md"]

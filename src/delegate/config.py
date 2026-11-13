@@ -37,6 +37,8 @@ class Role:
     allowed_escalation_reasons: tuple[str, ...] = ()
     requires_explicit_user_direction: bool = False
     fast: bool | None = None
+    #: The two workers this role spreads its tasks over, so they can be compared.
+    compare_workers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,7 @@ class Plan:
     denied_read_paths: tuple[str, ...] = ()
     isolate_home: bool = True
     resume_limit: int = 2
+    common_instructions: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,7 @@ class Settings:
     default_worker: str | None
     denied_read_paths: tuple[str, ...] = ()
     temp_root: str | None = None
+    common_instructions: str | None = None
 
     def plan(self, role_name: str, *, worker: str | None = None, fast: bool | None = None) -> Plan:
         role = self.roles.get(role_name)
@@ -110,6 +114,7 @@ class Settings:
             denied_read_paths=self.denied_read_paths,
             isolate_home=chosen.isolate_home,
             resume_limit=chosen.resume_limit,
+            common_instructions=self.common_instructions,
         )
 
     def _choose_worker(self, requested: str | None, preferred: str | None) -> Worker:
@@ -199,11 +204,48 @@ def _string_values(body: dict[str, Any], key: str, where: str) -> tuple[str, ...
     return tuple(values)
 
 
+def _compare_workers(
+    body: dict[str, Any], where: str, known: set[str], enabled: set[str]
+) -> tuple[str, ...]:
+    if "compare_workers" not in body:
+        return ()
+    values = body["compare_workers"]
+    key = f"{where}.compare_workers"
+    if not isinstance(values, list) or not all(
+        isinstance(value, str) and value.strip() for value in values
+    ):
+        raise ConfigError(f"{key} must be an array of worker names")
+    if len(values) != 2 or values[0] == values[1]:
+        raise ConfigError(f"{key} must name exactly two distinct workers to compare")
+    unknown = [value for value in values if value not in known]
+    if unknown:
+        raise ConfigError(
+            f"{key} names unknown workers: {', '.join(unknown)} "
+            f"(configured workers: {', '.join(sorted(known)) or 'none configured'})"
+        )
+    disabled = [value for value in values if value not in enabled]
+    if disabled:
+        raise ConfigError(
+            f"{key} names workers that are not enabled: {', '.join(disabled)} "
+            "(set enabled = true, or leave them out)"
+        )
+    return tuple(values)
+
+
 def _optional_bool(body: dict[str, Any], key: str, where: str, *, default: bool = False) -> bool:
     value = body.get(key, default)
     if not isinstance(value, bool):
         raise ConfigError(f"{where}.{key} must be a boolean")
     return value
+
+
+def _common_instructions(raw: dict[str, Any]) -> str | None:
+    if "common" not in raw:
+        return None
+    body = raw["common"]
+    if not isinstance(body, dict):
+        raise ConfigError("common must be a table")
+    return _optional_nonempty_string(body, "instructions", "common")
 
 
 def _resume_limit(body: dict[str, Any], where: str) -> int:
@@ -214,11 +256,15 @@ def _resume_limit(body: dict[str, Any], where: str) -> int:
 
 
 def load(path: Path) -> Settings:
-    with path.open("rb") as handle:
-        try:
-            raw: dict[str, Any] = tomllib.load(handle)
-        except tomllib.TOMLDecodeError as error:
-            raise ConfigError(f"{path} is not valid TOML: {error}") from error
+    return parse(path.read_bytes(), path)
+
+
+def parse(data: bytes, path: Path) -> Settings:
+    """Settings from the bytes of ``path``, so a caller can hash what it parsed."""
+    try:
+        raw: dict[str, Any] = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ConfigError(f"{path} is not valid TOML: {error}") from error
 
     roles = {}
     for name, body in raw.get("roles", {}).items():
@@ -244,6 +290,16 @@ def load(path: Path) -> Settings:
             fast=_optional_bool(body, "fast", where) if "fast" in body else None,
             requires_explicit_user_direction=_optional_bool(
                 body, "requires_explicit_user_direction", where
+            ),
+            compare_workers=_compare_workers(
+                body,
+                where,
+                set(raw.get("workers", {})),
+                {
+                    name
+                    for name, worker in raw.get("workers", {}).items()
+                    if isinstance(worker, dict) and bool(worker.get("enabled", False))
+                },
             ),
         )
     workers = {
@@ -277,4 +333,5 @@ def load(path: Path) -> Settings:
         default_worker=str(default_worker) if default_worker is not None else None,
         denied_read_paths=_denied_read_paths(raw),
         temp_root=temp_root,
+        common_instructions=_common_instructions(raw),
     )
