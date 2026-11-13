@@ -37,6 +37,8 @@ class Role:
     allowed_escalation_reasons: tuple[str, ...] = ()
     requires_explicit_user_direction: bool = False
     fast: bool | None = None
+    #: Two or more workers this role alternates between, so they can be compared.
+    compare_workers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -202,6 +204,28 @@ def _string_values(body: dict[str, Any], key: str, where: str) -> tuple[str, ...
     return tuple(values)
 
 
+def _compare_workers(body: dict[str, Any], where: str, known: set[str]) -> tuple[str, ...]:
+    if "compare_workers" not in body:
+        return ()
+    values = body["compare_workers"]
+    key = f"{where}.compare_workers"
+    if not isinstance(values, list) or not all(
+        isinstance(value, str) and value.strip() for value in values
+    ):
+        raise ConfigError(f"{key} must be an array of worker names")
+    if len(values) < 2:
+        raise ConfigError(f"{key} needs at least two workers to compare")
+    if len(set(values)) != len(values):
+        raise ConfigError(f"{key} must name distinct workers")
+    unknown = [value for value in values if value not in known]
+    if unknown:
+        raise ConfigError(
+            f"{key} names unknown workers: {', '.join(unknown)} "
+            f"(configured workers: {', '.join(sorted(known)) or 'none configured'})"
+        )
+    return tuple(values)
+
+
 def _optional_bool(body: dict[str, Any], key: str, where: str, *, default: bool = False) -> bool:
     value = body.get(key, default)
     if not isinstance(value, bool):
@@ -261,6 +285,7 @@ def parse(data: bytes, path: Path) -> Settings:
             requires_explicit_user_direction=_optional_bool(
                 body, "requires_explicit_user_direction", where
             ),
+            compare_workers=_compare_workers(body, where, set(raw.get("workers", {}))),
         )
     workers = {
         name: Worker(

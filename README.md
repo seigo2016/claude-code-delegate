@@ -78,6 +78,16 @@ in order: `--worker`, the role's `preferred_worker`, then `default_worker`. A
 role asking for a level the chosen worker does not define is refused before
 anything starts.
 
+To compare two workers on one role, give it `compare_workers = ["codex",
+"claude"]` (two or more distinct configured worker names, checked when the
+settings load). Without `--worker`, successive submits take the names in turn:
+the arm is `compare_workers[n % len]`, where `n` counts the role's tasks already
+in the task root that have a `route_arm`. The choice is recorded in `state.json`
+as `route_arm` (the worker name) and `route_policy = "compare"`. It replaces
+`preferred_worker` for that role; `--worker` still wins and records
+`route_policy = "explicit"` with no `route_arm`, so it does not move the
+alternation. Identical in-flight requests are deduplicated only within one arm.
+
 An optional top-level `[common]` table with `instructions = """..."""` holds text
 that goes into every task's prompt, once, under "Instructions common to all roles"
 and before the role's own `instructions`.

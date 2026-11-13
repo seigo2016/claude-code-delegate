@@ -66,6 +66,8 @@ plugin を install しても、main agent は差し替わらず、tool も外れ
 
 role が指定するのは level であり、model 名ではありません。その level が何を意味するかは worker 側が定義します。role には `preferred_worker` も指定できます。worker は `--worker`、role の `preferred_worker`、`default_worker` の順で選びます。選んだ worker がその level を定義していなければ、起動する前に拒否します。
 
+1 つの role を 2 つの worker で比べるには、role に `compare_workers = ["codex", "claude"]`（設定済みで重複しない worker 名を 2 つ以上。設定の読み込み時に検査）を書きます。`--worker` がなければ、submit のたびにこの順で交互に選びます。arm は `compare_workers[n % 個数]` で、`n` は task root にある、その role の task のうち `route_arm` を持つものの数です。選択は `state.json` に `route_arm`（worker 名）と `route_policy = "compare"` として残ります。この role では `preferred_worker` より優先します。`--worker` は引き続き最優先で、`route_policy = "explicit"` を記録し `route_arm` は付けないので、交互の順序は進みません。同一の実行中 request を重複とみなすのは同じ arm の中だけです。
+
 role に `allowed_escalation_reasons` を指定すると、packet はその一覧に含まれる `escalation_reason` を持つ必要があります。`requires_explicit_user_direction = true` を指定した role では、packet に `"user_directed": true` も必要です。どちらも監査のため task と一緒に記録します。`user_directed` は呼び出し側の申告であり、人が指示したことを証明する値ではありません。
 
 | adapter | 起動 | 結果の受け取り |

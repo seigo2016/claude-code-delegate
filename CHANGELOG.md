@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add the role key `compare_workers = [...]` (two or more distinct configured workers, validated at load). Without `--worker`, submit alternates between them by counting the role's tasks that have a `route_arm`, and records `route_arm` and `route_policy = "compare"`; `--worker` still wins and records `route_policy = "explicit"`. Deduplication no longer merges tasks across arms.
 - Add an optional `[common] instructions` table to the settings: its text is placed once in every task's prompt, before the role's own instructions.
 - Add `submit --config <path>` and `--task-root <path>` (also on `status`, `collect`, `cancel`, `reconcile`, `watch`) to read settings from, and keep task records in, a place other than the project root; the worker still runs in the project root. `state.json` records `config_path`, `config_sha256` and `task_root`. Handles, the session watch registry and `watch-group.json` carry `task_root` when it is not the default, and entries without it still mean the default.
 

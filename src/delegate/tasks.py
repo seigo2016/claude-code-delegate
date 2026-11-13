@@ -273,6 +273,7 @@ def _find_duplicate(
     owner_id: str | None,
     *,
     fast: bool = False,
+    route_arm: str | None = None,
 ) -> dict[str, Any] | None:
     """The identical task that is still running, if there is one.
 
@@ -293,6 +294,8 @@ def _find_duplicate(
             and state.get("owner_kind", "session") == owner_kind
             and state.get("owner_id", state.get("submitter_session_id")) == owner_id
             and state.get("fast", False) == fast
+            # Two arms of a comparison are two runs, however alike their requests.
+            and state.get("route_arm") == route_arm
         ):
             return state
     return None
@@ -389,6 +392,37 @@ def _preflight(plan: config.Plan, binary: str) -> None:
         )
 
 
+def _route(
+    settings: config.Settings, role: str, worker: str | None, root: Path
+) -> tuple[str | None, str | None, str | None]:
+    """Which worker to ask for, and why: ``(worker, route_arm, route_policy)``.
+
+    An explicit worker always wins. Otherwise a role that compares workers takes
+    them in turn, counted over the tasks of that role already in the ledger.
+    """
+    if worker is not None:
+        return worker, None, "explicit"
+    role_def = settings.roles.get(role)
+    if role_def is None or not role_def.compare_workers:
+        return None, None, None
+    arms = role_def.compare_workers
+    taken = sum(
+        1 for state in _all_states(root) if state.get("role") == role and state.get("route_arm")
+    )
+    arm = arms[taken % len(arms)]
+    return arm, arm, "compare"
+
+
+def _all_states(root: Path) -> list[dict[str, Any]]:
+    found = []
+    for path in sorted(root.glob("*/state.json")):
+        try:
+            found.append(store.read_json(path))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return found
+
+
 def submit(
     *,
     project_root: Path,
@@ -407,7 +441,9 @@ def submit(
     if value["host_only"]:
         raise SubmitRefused("host_only work must stay in Claude Code", run_in="claude-code")
 
-    plan = settings.plan(role, worker=worker, fast=fast)
+    ledger_root = ledger if ledger is not None else task_root(project_root)
+    chosen, route_arm, route_policy = _route(settings, role, worker, ledger_root)
+    plan = settings.plan(role, worker=chosen, fast=fast)
     escalation_reason = value.get("escalation_reason")
     if plan.role.allowed_escalation_reasons:
         if escalation_reason is None:
@@ -461,7 +497,7 @@ def submit(
         raise SubmitRefused(str(error)) from error
     _preflight(plan, adapter.name)
 
-    root = ledger if ledger is not None else task_root(project_root)
+    root = ledger_root
     root.mkdir(parents=True, exist_ok=True)
     key = fingerprint(project_root, role, title, value)
     # An explicit owner makes a bridge task. It has no submitting session, so no
@@ -469,7 +505,9 @@ def submit(
     owner_kind = "bridge" if owner else "session"
     owner_id = owner or os.environ.get("CLAUDE_CODE_SESSION_ID") or None
     submitter_session_id = None if owner else owner_id
-    duplicate = _find_duplicate(root, key, owner_kind, owner_id, fast=plan.fast)
+    duplicate = _find_duplicate(
+        root, key, owner_kind, owner_id, fast=plan.fast, route_arm=route_arm
+    )
     if duplicate is not None:
         return handle_of(duplicate, deduplicated=True)
 
@@ -490,6 +528,8 @@ def submit(
         "role": role,
         "title": title,
         "worker": plan.worker,
+        "route_arm": route_arm,
+        "route_policy": route_policy,
         "adapter": plan.adapter,
         "model": plan.model,
         "effort": plan.effort,
