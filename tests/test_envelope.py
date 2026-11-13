@@ -367,3 +367,20 @@ def test_settle_leaves_write_not_done_for_the_incomplete_work_path() -> None:
         "blockers": [blocker("not_done"), blocker("environment")],
     }
     assert envelope.settle(result, writes_allowed=True)["status"] == "completed"
+
+
+def test_chair_display_does_not_crash_on_malformed_counts_or_coverage() -> None:
+    base = {
+        "status": "completed",
+        "observed_facts": [],
+        "verified_comparisons": [],
+        "artifact_paths": [],
+        "blockers": [],
+        "decision_needed": [],
+    }
+    for extra in (
+        {"counts": [1, {"count": 2}, {"name": 3}]},
+        {"coverage": {"done": 1, "total": 2, "remaining": [{"x": 1}, 5]}},
+    ):
+        shown = envelope.chair_display({**base, **extra})
+        assert shown["status"] == "completed"

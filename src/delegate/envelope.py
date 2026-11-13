@@ -157,8 +157,13 @@ def chair_display(result: dict[str, Any]) -> dict[str, Any]:
             result[field] = [_shortened(item) for item in value[:MAX_ITEMS]]
     counts = result.get("counts")
     if isinstance(counts, list):
+        # A result that failed validation can still reach here; shorten what has
+        # the expected shape and pass anything else through untouched.
         result["counts"] = [
-            {**item, "name": item["name"][:MAX_COUNT_NAME_CHARS]} for item in counts[:MAX_COUNTS]
+            {**item, "name": item["name"][:MAX_COUNT_NAME_CHARS]}
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+            else item
+            for item in counts[:MAX_COUNTS]
         ]
         result["counts_dropped"] = max(0, len(counts) - MAX_COUNTS)
     coverage = result.get("coverage")
@@ -166,7 +171,10 @@ def chair_display(result: dict[str, Any]) -> dict[str, Any]:
         remaining = coverage["remaining"]
         result["coverage"] = {
             **coverage,
-            "remaining": [item[:MAX_REMAINING_CHARS] for item in remaining[:MAX_REMAINING]],
+            "remaining": [
+                item[:MAX_REMAINING_CHARS] if isinstance(item, str) else item
+                for item in remaining[:MAX_REMAINING]
+            ],
             "remaining_dropped": max(0, len(remaining) - MAX_REMAINING),
         }
     return result
