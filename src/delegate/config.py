@@ -214,11 +214,15 @@ def _resume_limit(body: dict[str, Any], where: str) -> int:
 
 
 def load(path: Path) -> Settings:
-    with path.open("rb") as handle:
-        try:
-            raw: dict[str, Any] = tomllib.load(handle)
-        except tomllib.TOMLDecodeError as error:
-            raise ConfigError(f"{path} is not valid TOML: {error}") from error
+    return parse(path.read_bytes(), path)
+
+
+def parse(data: bytes, path: Path) -> Settings:
+    """Settings from the bytes of ``path``, so a caller can hash what it parsed."""
+    try:
+        raw: dict[str, Any] = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ConfigError(f"{path} is not valid TOML: {error}") from error
 
     roles = {}
     for name, body in raw.get("roles", {}).items():

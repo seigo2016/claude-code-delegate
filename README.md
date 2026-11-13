@@ -220,7 +220,20 @@ something.
 | `delegate watch` | what the hook runs; waits for something to collect |
 
 `submit` takes `--worker <name>` to override the backend for one task. Every
-command takes `--project-root`. The submit handle and completion notification
+command takes `--project-root`.
+
+Settings and task records need not live under the project root. `submit --config
+<path>` reads that file instead of `<project-root>/.claude/delegate.toml`, and
+`--task-root <path>` (on `submit`, `status`, `collect`, `cancel`, `reconcile` and
+`watch`) keeps the task records there instead of under
+`<project-root>/.claude/logs/delegate/`. The worker still runs with the project
+root as its working directory. `state.json` records `config_path` (absolute) and
+`config_sha256` (of the bytes that were read) for every task. A handle from a
+non-default root carries `task_root`, which the completion hook, its per-session
+registry and `watch-group.json` pass along; entries without it mean the default
+root, so older ones keep working. Give the same `--task-root` to the later
+commands, since `collect` cannot guess where a task was stored.
+ The submit handle and completion notification
 carry the resolved root so cross-repository tasks are collected from the same
 ledger they were submitted to. One Bash call may submit several independent
 tasks: the hook tracks every returned handle. After collecting one, it re-arms

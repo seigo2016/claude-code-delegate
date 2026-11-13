@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `submit --config <path>` and `--task-root <path>` (also on `status`, `collect`, `cancel`, `reconcile`, `watch`) to read settings from, and keep task records in, a place other than the project root; the worker still runs in the project root. `state.json` records `config_path`, `config_sha256` and `task_root`. Handles, the session watch registry and `watch-group.json` carry `task_root` when it is not the default, and entries without it still mean the default.
+
 - Manual `reconcile` and `watch` no longer offer bridge-owned tasks to a session caller; `--owner <id>` shows only that owner's bridge tasks.
 - Make `collect` deliver exactly once: the delivered check and its record now share one lock hold.
 - Add owner kinds: `submit --owner` makes a bridge-owned task that only the same owner may `collect` or `cancel` (`owner_mismatch`, exit 5) and that hooks never announce. `collect` records `delivered_to`. The owner comes only from `--owner` (no environment variable), and workers no longer inherit `CLAUDE_CODE_SESSION_ID` or owner variables; the check guards against mistakes, not against a hostile caller.

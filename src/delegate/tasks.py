@@ -60,6 +60,18 @@ def task_root(project_root: Path) -> Path:
     return project_root / TASK_ROOT
 
 
+def explicit_root(project_root: Path, root: str | Path | None) -> Path | None:
+    """The task root a handle names, or ``None`` when it is the project's default.
+
+    Handles, registry entries and watch groups written before ``--task-root`` existed
+    carry no root, and must keep meaning the default one.
+    """
+    if not isinstance(root, str | Path) or not str(root):
+        return None
+    path = Path(root)
+    return None if path == task_root(project_root) else path
+
+
 def _completion_watch_registry_root() -> Path:
     configured = os.environ.get("DELEGATE_WATCH_ROOT")
     if configured:
@@ -67,8 +79,12 @@ def _completion_watch_registry_root() -> Path:
     return Path.home() / ".claude" / "delegate" / "watch-sessions"
 
 
-def _completion_watch_path(session_id: str, project_root: Path, task_id: str) -> Path:
+def _completion_watch_path(
+    session_id: str, project_root: Path, task_id: str, root: Path | None = None
+) -> Path:
     identity = f"{project_root}\0{task_id}".encode()
+    if root is not None:
+        identity = f"{project_root}\0{task_id}\0{root}".encode()
     return (
         _completion_watch_registry_root()
         / hashlib.sha256(session_id.encode()).hexdigest()
@@ -77,14 +93,16 @@ def _completion_watch_path(session_id: str, project_root: Path, task_id: str) ->
     )
 
 
-def register_completion_watch(project_root: Path, task_id: str, session_id: str | None) -> None:
+def register_completion_watch(
+    project_root: Path, task_id: str, session_id: str | None, root: Path | None = None
+) -> None:
     """Make a submitted task discoverable even if a shell pipeline hides its handle."""
     if not session_id:
         return
-    store.write_json(
-        _completion_watch_path(session_id, project_root, task_id),
-        {"project_root": str(project_root), "task_id": task_id},
-    )
+    entry = {"project_root": str(project_root), "task_id": task_id}
+    if root is not None:
+        entry["task_root"] = str(root)
+    store.write_json(_completion_watch_path(session_id, project_root, task_id, root), entry)
 
 
 def pending_completion_watches(session_id: str | None = None) -> list[dict[str, str]]:
@@ -100,9 +118,11 @@ def pending_completion_watches(session_id: str | None = None) -> list[dict[str, 
         except (OSError, ValueError, json.JSONDecodeError):
             continue
         if isinstance(value.get("project_root"), str) and isinstance(value.get("task_id"), str):
+            project = Path(value["project_root"])
+            root = explicit_root(project, value.get("task_root"))
             try:
                 state = store.read_json(
-                    task_root(Path(value["project_root"])) / value["task_id"] / "state.json"
+                    (root or task_root(project)) / value["task_id"] / "state.json"
                 )
             except (OSError, ValueError, json.JSONDecodeError):
                 continue
@@ -110,12 +130,13 @@ def pending_completion_watches(session_id: str | None = None) -> list[dict[str, 
             if owner != session_id:
                 continue
             if path.parent == legacy_root:
-                destination = _completion_watch_path(
-                    session_id, Path(value["project_root"]), value["task_id"]
-                )
+                destination = _completion_watch_path(session_id, project, value["task_id"], root)
                 store.write_json(destination, value)
                 path.unlink(missing_ok=True)
-            found.append({"project_root": value["project_root"], "task_id": value["task_id"]})
+            entry = {"project_root": value["project_root"], "task_id": value["task_id"]}
+            if root is not None:
+                entry["task_root"] = str(root)
+            found.append(entry)
     return found
 
 
@@ -123,8 +144,9 @@ def clear_pending_completion_watches(session_id: str, watches: list[dict[str, st
     if not session_id:
         return
     for watch in watches:
-        path = _completion_watch_path(session_id, Path(watch["project_root"]), watch["task_id"])
-        path.unlink(missing_ok=True)
+        project = Path(watch["project_root"])
+        root = explicit_root(project, watch.get("task_root"))
+        _completion_watch_path(session_id, project, watch["task_id"], root).unlink(missing_ok=True)
 
 
 def fingerprint(project_root: Path, role: str, title: str, value: dict[str, Any]) -> str:
@@ -274,7 +296,7 @@ def _find_duplicate(
 
 
 def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str, Any]:
-    return {
+    handle = {
         "task_id": state["task_id"],
         "project_root": state["project_root"],
         "status": state["status"],
@@ -287,6 +309,11 @@ def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str,
         "next_action": "end_turn",
         "completion_delivery": "async_rewake",
     }
+    # Only a ledger away from the default is named, so a default handle stays as it was.
+    root = explicit_root(Path(state["project_root"]), state.get("task_root"))
+    if root is not None:
+        handle["task_root"] = str(root)
+    return handle
 
 
 def _non_repo_relative(values: list[str]) -> list[str]:
@@ -369,6 +396,9 @@ def submit(
     worker: str | None = None,
     fast: bool | None = None,
     owner: str | None = None,
+    config_path: Path | None = None,
+    config_sha256: str | None = None,
+    ledger: Path | None = None,
 ) -> dict[str, Any]:
     packet_module.validate(value)
     if value["host_only"]:
@@ -428,7 +458,7 @@ def submit(
         raise SubmitRefused(str(error)) from error
     _preflight(plan, adapter.name)
 
-    root = task_root(project_root)
+    root = ledger if ledger is not None else task_root(project_root)
     root.mkdir(parents=True, exist_ok=True)
     key = fingerprint(project_root, role, title, value)
     # An explicit owner makes a bridge task. It has no submitting session, so no
@@ -451,6 +481,9 @@ def submit(
         "created_at": created,
         "updated_at": created,
         "project_root": str(project_root),
+        "task_root": str(root),
+        "config_path": str(config_path) if config_path is not None else None,
+        "config_sha256": config_sha256,
         "role": role,
         "title": title,
         "worker": plan.worker,
@@ -502,7 +535,9 @@ def submit(
     (task_dir / "prompt.md").write_text(compose_prompt(project_root, plan, value), encoding="utf-8")
     store.write_json(task_dir / "state.json", state)
     state = events.emit(task_dir, "starting")
-    register_completion_watch(project_root, task_id, submitter_session_id)
+    register_completion_watch(
+        project_root, task_id, submitter_session_id, explicit_root(project_root, root)
+    )
 
     try:
         worker_process = subprocess.Popen(
