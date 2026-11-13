@@ -317,14 +317,13 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     return "\n".join(lines) + "\n"
 
 
-def _find_duplicate(
-    root: Path, key: str, owner: Owner, *, fast: bool, route_arm: str | None
-) -> dict[str, Any] | None:
+def _find_duplicate(root: Path, key: str, owner: Owner, *, fast: bool) -> dict[str, Any] | None:
     """The identical task that is still running, if there is one.
 
     Only a task still in flight counts. Matching finished ones too would answer a
     fresh question with an old answer, and the question is usually being asked
-    again because something has changed since.
+    again because something has changed since. The worker does not matter: the
+    request is the same on either arm of a comparison.
     """
     for state in reversed(_all_states(root)):
         if (
@@ -332,8 +331,6 @@ def _find_duplicate(
             and state.get("status") in events.ACTIVE_STATES
             and owner_of(state) == owner
             and state.get("fast", False) == fast
-            # Two arms of a comparison are two runs, however alike their requests.
-            and state.get("route_arm") == route_arm
         ):
             return state
     return None
@@ -520,7 +517,6 @@ def submit(
             key,
             caller,
             fast=first.fast,
-            route_arm=first.worker if route_policy == "compare" else None,
         )
         if running is not None:
             return handle_of(running, deduplicated=True)

@@ -115,15 +115,15 @@ def test_an_explicit_worker_wins_and_a_plain_role_records_no_route(project: Path
     assert (plain["worker"], plain["route_policy"], plain["route_arm"]) == ("codex", None, None)
 
 
-def test_identical_running_requests_merge_only_on_the_same_arm(
+def test_identical_running_requests_merge_whichever_arm_the_new_id_hashes_to(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     force_arm(monkeypatch, "codex")
     first = submit(project)
-    assert submit(project)["task_id"] == first["task_id"]
-    force_arm(monkeypatch, "opencode")
-    other = submit(project)
-    assert other["task_id"] != first["task_id"] and other["worker"] == "opencode"
+    for arm in ARMS:
+        force_arm(monkeypatch, arm)
+        again = submit(project)
+        assert again["task_id"] == first["task_id"] and again["deduplicated"] is True
 
 
 def test_an_arm_that_cannot_start_hands_over_to_the_other(
