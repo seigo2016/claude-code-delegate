@@ -591,47 +591,6 @@ def test_write_task_with_identical_not_done_blockers_stops_resuming(
     assert len(workspace.calls()) == 2
 
 
-def test_legacy_string_blockers_on_a_completed_write_task_count_as_not_done(
-    workspace: Workspace,
-) -> None:
-    workspace.script({"work_complete": True, "blockers": ["a legacy string"]})
-    handle = workspace.submit(packet=write_packet(), role="bounded-implementer")
-    state = wait_for_terminal(workspace, handle["task_id"])
-    assert state["failure_class"] == "incomplete_work"
-
-
-def forbidden_packet(base: str) -> str:
-    return json.dumps({**json.loads(base), "forbidden": ["running the network check"]})
-
-
-def forbidden_blocker(item: str | None) -> dict:
-    blocker = {"reason": "forbidden_by_packet", "text": "check prohibited"}
-    return {**blocker, "forbidden_item": item} if item is not None else blocker
-
-
-def test_write_task_keeps_completed_with_a_matching_forbidden_by_packet(
-    workspace: Workspace,
-) -> None:
-    blockers = [forbidden_blocker("running the network check")]
-    workspace.script({"work_complete": True, "blockers": blockers})
-    handle = workspace.submit(packet=forbidden_packet(write_packet()), role="bounded-implementer")
-    state = wait_for_terminal(workspace, handle["task_id"])
-    assert state["status"] == "completed"
-    assert state["resume_count"] == 0
-    assert workspace.run("collect", handle["task_id"])["result"]["blockers"] == blockers
-
-
-@pytest.mark.parametrize("item", [None, "something else"])
-def test_write_task_treats_an_unmatched_forbidden_by_packet_as_not_done(
-    workspace: Workspace, item: str | None
-) -> None:
-    workspace.script({"work_complete": True, "blockers": [forbidden_blocker(item)]})
-    handle = workspace.submit(packet=forbidden_packet(write_packet()), role="bounded-implementer")
-    state = wait_for_terminal(workspace, handle["task_id"])
-    assert state["failure_class"] == "incomplete_work"
-    assert state["resume_results"][0]["result"]["blockers"] == [not_done("check prohibited")]
-
-
 def test_write_task_with_an_environment_blocker_ends_unverified_without_resuming(
     workspace: Workspace,
 ) -> None:
@@ -658,14 +617,6 @@ def test_read_only_task_completed_with_a_not_done_blocker_ends_unverified(
     assert result["blockers"] == [not_done("did not check the third file")]
 
 
-def test_read_only_task_with_a_legacy_string_blocker_ends_unverified(
-    workspace: Workspace,
-) -> None:
-    workspace.script({"blockers": ["a legacy string"]})
-    handle = workspace.submit()
-    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "unverified"
-
-
 def test_read_only_task_with_an_environment_blocker_ends_unverified(
     workspace: Workspace,
 ) -> None:
@@ -675,20 +626,9 @@ def test_read_only_task_with_an_environment_blocker_ends_unverified(
     assert (state["status"], state["terminal_reason"]) == ("unverified", "environment_blocked")
 
 
-def test_read_only_task_keeps_completed_with_a_matching_forbidden_by_packet(
-    workspace: Workspace,
-) -> None:
-    workspace.script({"blockers": [forbidden_blocker("running the network check")]})
-    handle = workspace.submit(packet=forbidden_packet(PACKET))
-    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "completed"
-
-
-@pytest.mark.parametrize("item", [None, "something else"])
-def test_read_only_task_treats_an_unmatched_forbidden_by_packet_as_not_done(
-    workspace: Workspace, item: str | None
-) -> None:
-    workspace.script({"blockers": [forbidden_blocker(item)]})
-    handle = workspace.submit(packet=forbidden_packet(PACKET))
+def test_a_removed_forbidden_by_packet_reason_is_unfinished_work(workspace: Workspace) -> None:
+    workspace.script({"blockers": [{"reason": "forbidden_by_packet", "text": "check prohibited"}]})
+    handle = workspace.submit()
     assert wait_for_terminal(workspace, handle["task_id"])["status"] == "unverified"
 
 
@@ -713,31 +653,6 @@ def test_the_missing_reads_refusal_points_to_read_optional_for_paths_in_question
     assert refused["missing_reads"] == ["~nosuchuser-zz/x.md"]
     assert "existence is itself the question" in refused["error"]
     assert "read_optional" in refused["error"]
-
-
-def test_read_only_task_citing_a_built_in_forbidden_entry_ends_unverified(
-    workspace: Workspace,
-) -> None:
-    # Every prompt carries the built-in entries, so citing one excuses nothing.
-    blocker = {
-        "reason": "forbidden_by_packet",
-        "text": "did not overwrite the data",
-        "forbidden_item": "destructive writes",
-    }
-    workspace.script({"blockers": [blocker]})
-    handle = workspace.submit()
-    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "unverified"
-
-
-def test_read_only_task_with_not_done_and_environment_is_not_reported_as_environment(
-    workspace: Workspace,
-) -> None:
-    workspace.script(
-        {"blockers": [not_done("third file unread"), {"reason": "environment", "text": "ssh"}]}
-    )
-    handle = workspace.submit()
-    state = wait_for_terminal(workspace, handle["task_id"])
-    assert (state["status"], state["terminal_reason"]) == ("unverified", "normal_exit")
 
 
 def test_resume_record_shows_the_settled_status_of_the_resumed_attempt(

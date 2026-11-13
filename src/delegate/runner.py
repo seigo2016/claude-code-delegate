@@ -11,7 +11,6 @@ import os
 import signal
 import subprocess
 import time
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -95,20 +94,6 @@ def worker_environment(task_id: str | None = None) -> dict[str, str]:
     return env
 
 
-def _packet_forbidden(task_dir: Path) -> list[str]:
-    """The packet's own ``forbidden`` entries, which a blocker may cite by name.
-
-    The built-in prohibitions are left out on purpose: every prompt carries them,
-    so citing one would let any unfinished work keep ``completed``.
-    """
-    try:
-        value = store.read_json(task_dir / "packet.json").get("forbidden", [])
-    except (OSError, ValueError, AttributeError):
-        return []
-    own = [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
-    return [item for item in own if item not in envelope.BUILT_IN_FORBIDDEN]
-
-
 def _keep_last_message(
     task_dir: Path, view: diagnose.RunView, *, writes_allowed: bool = False
 ) -> dict[str, Any]:
@@ -120,22 +105,12 @@ def _keep_last_message(
         "recovery_status": "raw",
         "last_agent_message_path": str(message_path),
     }
-    parsed = envelope.from_text(view.last_agent_message)
-    forbidden = _packet_forbidden(task_dir)
-    cleaned = envelope.sanitize(parsed, writes_allowed=writes_allowed, forbidden=forbidden)
-    if (
-        parsed is not None
-        and not envelope.violations(cleaned, writes_allowed=writes_allowed)
-        and not envelope.incomplete_write_work(cleaned, writes_allowed=writes_allowed)
-    ):
+    judgement = envelope.judge(
+        envelope.from_text(view.last_agent_message), writes_allowed=writes_allowed
+    )
+    if judgement.result is not None and judgement.status != "failed":
         recovered = task_dir / "recovered-result.json"
-        raw_result = envelope.from_text(view.last_agent_message)
-        sanitized = (
-            envelope.sanitize(raw_result, writes_allowed=writes_allowed, forbidden=forbidden)
-            if raw_result is not None
-            else {}
-        )
-        store.write_json(recovered, sanitized)
+        store.write_json(recovered, judgement.result)
         fields["recovery_status"] = "usable"
         fields["recovered_result_path"] = str(recovered)
     return fields
@@ -344,19 +319,8 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                 **_snapshot(view),
             }
             fields.update(_write_scope(project_root, before, task_dir, view))
-            result, _ = _result_of(state, view)
-            sanitized = (
-                envelope.sanitize(
-                    result, writes_allowed=True, forbidden=_packet_forbidden(task_dir)
-                )
-                if result is not None
-                else None
-            )
-            valid = sanitized is not None and not envelope.violations(
-                sanitized, writes_allowed=True
-            )
-            incomplete = bool(
-                valid and envelope.incomplete_write_work(sanitized, writes_allowed=True)
+            judgement = envelope.judge(
+                _result_of(state, view), writes_allowed=bool(state["writes_allowed"])
             )
             if resume_count:
                 resume_results[-1].update(
@@ -370,24 +334,23 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                         else "write_scope_violation"
                         if fields["unauthorized_writes"]
                         else "incomplete_work"
-                        if incomplete
-                        else str(envelope.settle(sanitized, writes_allowed=True)["status"])
-                        if valid
+                        if judgement.needs_resume
+                        else judgement.status
+                        if judgement.status != "failed"
                         else "invalid_or_empty_result"
                     ),
-                    result=sanitized,
+                    result=judgement.result,
                     exit_code=exit_code,
                 )
                 events.update(task_dir, resume_results=resume_results)
             blockers = (
-                sorted((item.get("reason"), item.get("text")) for item in sanitized["blockers"])
-                if incomplete
+                sorted((item["reason"], item["text"]) for item in judgement.result["blockers"])
+                if judgement.needs_resume and judgement.result is not None
                 else None
             )
             repeated = previous_blockers is not None and blockers == previous_blockers
             if (
-                incomplete
-                and state["writes_allowed"]
+                judgement.needs_resume
                 and state["adapter"] == "codex"
                 and view.session_id
                 and not repeated
@@ -473,38 +436,31 @@ def _absorb(
     return view
 
 
-def _salvaged_result(
-    view: diagnose.RunView, *, writes_allowed: bool = False, forbidden: Sequence[str] = ()
-) -> dict[str, Any] | None:
+def _salvaged_result(view: diagnose.RunView, *, writes_allowed: bool) -> dict[str, Any] | None:
     """A result worth delivering despite the timeout, if the worker left one.
 
     The worker finished its turn but never handed the result back through the
     file it was given. Promoting the message is only honest when it already
     satisfies the contract; anything else stays a timeout.
     """
-    parsed = envelope.from_text(view.last_agent_message or "")
-    if parsed is None:
-        return None
-    result = envelope.sanitize(parsed, writes_allowed=writes_allowed, forbidden=forbidden)
-    if envelope.violations(result, writes_allowed=writes_allowed):
-        return None
-    if envelope.incomplete_write_work(result, writes_allowed=writes_allowed):
-        return None
-    return envelope.settle(result, writes_allowed=writes_allowed)
+    judgement = envelope.judge(
+        envelope.from_text(view.last_agent_message or ""), writes_allowed=writes_allowed
+    )
+    return judgement.result if judgement.status != "failed" else None
 
 
-def _result_of(state: dict[str, Any], view: diagnose.RunView) -> tuple[dict[str, Any] | None, str]:
+def _result_of(state: dict[str, Any], view: diagnose.RunView) -> dict[str, Any] | None:
     """The result the worker produced, from a file if it can write one, else from
     its last message. ``None`` means it produced nothing to judge."""
     result_path = Path(state["result_path"])
     if result_path.exists() and result_path.stat().st_size:
         try:
-            return store.read_json(result_path), "file"
+            return store.read_json(result_path)
         except (OSError, ValueError, json.JSONDecodeError):
-            return {}, "file"
+            return {}
     if view.last_agent_message is not None:
-        return envelope.from_text(view.last_agent_message) or {}, "final_message"
-    return None, "none"
+        return envelope.from_text(view.last_agent_message) or {}
+    return None
 
 
 def _save_result(task_dir: Path, result_path: Path, result: dict[str, Any]) -> None:
@@ -532,9 +488,7 @@ def _finish(
         events.emit(task_dir, "cancelled", terminal_reason="cancelled", **fields)
         return
     if timed_out:
-        salvaged = _salvaged_result(
-            view, writes_allowed=writes_allowed, forbidden=_packet_forbidden(task_dir)
-        )
+        salvaged = _salvaged_result(view, writes_allowed=writes_allowed)
         if salvaged is not None:
             _save_result(task_dir, Path(state["result_path"]), salvaged)
             events.emit(
@@ -581,60 +535,32 @@ def _finish(
         )
         return
 
-    result, source = _result_of(state, view)
-    if result is None:
+    judgement = envelope.judge(_result_of(state, view), writes_allowed=writes_allowed)
+    if judgement.status == "failed" and not judgement.needs_resume:
+        extra: dict[str, Any] = {}
+        if judgement.result is not None:
+            # So that a reader of the task finds the sanitized result in one place either way.
+            store.write_json(Path(state["result_path"]), judgement.result)
+            extra["result_problems"] = list(judgement.problems)
         events.emit(
             task_dir,
             "failed",
-            terminal_reason="empty_result",
+            terminal_reason=judgement.terminal_reason,
+            **extra,
             **failure_field,
             **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
             **fields,
         )
         return
-    result = envelope.sanitize(
-        result, writes_allowed=writes_allowed, forbidden=_packet_forbidden(task_dir)
-    )
-    # So that a reader of the task finds the sanitized result in one place either way.
-    problems = envelope.violations(result, writes_allowed=writes_allowed)
-    if problems:
-        store.write_json(Path(state["result_path"]), result)
+    assert judgement.result is not None
+    _save_result(task_dir, Path(state["result_path"]), judgement.result)
+    if judgement.needs_resume:
         events.emit(
             task_dir,
             "failed",
-            terminal_reason="invalid_result",
-            result_problems=problems,
-            **failure_field,
-            **_keep_last_message(task_dir, view, writes_allowed=writes_allowed),
-            **fields,
-        )
-        return
-    declared_complete = result["status"] == "completed"
-    result = envelope.settle(result, writes_allowed=writes_allowed)
-    _save_result(task_dir, Path(state["result_path"]), result)
-    if envelope.incomplete_write_work(result, writes_allowed=writes_allowed):
-        events.emit(
-            task_dir,
-            "failed",
-            terminal_reason="incomplete_work",
+            terminal_reason=judgement.terminal_reason,
             failure_class="incomplete_work",
             **fields,
         )
         return
-    terminal = (
-        result["status"] if result["status"] in {"decision_needed", "unverified"} else "completed"
-    )
-    # An environment failure that turned completed into unverified is the cause
-    # a reader needs to see, and no resume could fix it.
-    blocked = (
-        declared_complete
-        and terminal == "unverified"
-        and envelope.has_environment_blocker(result)
-        and not envelope.has_unfinished_blocker(result)
-    )
-    events.emit(
-        task_dir,
-        terminal,
-        terminal_reason="environment_blocked" if blocked else "normal_exit",
-        **fields,
-    )
+    events.emit(task_dir, judgement.status, terminal_reason=judgement.terminal_reason, **fields)

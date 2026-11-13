@@ -34,20 +34,18 @@ _SHAPE = {
     "observed_facts": ["what you saw, each with the path it came from"],
     "verified_comparisons": ["what you checked against what, and the outcome"],
     "artifact_paths": ["paths a reader should open"],
-    "blockers": [
-        {
-            "reason": "forbidden_by_packet | environment | not_done",
-            "text": "what stopped you",
-            "forbidden_item": "the exact forbidden entry for forbidden_by_packet, else null",
-        }
-    ],
+    "blockers": [{"reason": "environment | not_done", "text": "what stopped you"}],
     "decision_needed": "the question only the caller can answer, or null",
     "report": "full report text or null",
     "counts": [{"name": "count name", "count": 0}],
     "coverage": {"done": 0, "total": 0, "remaining": ["unfinished item"]},
     "work_complete": "boolean: whether all objective implementation is complete",
 }
-FORBIDDEN = envelope.BUILT_IN_FORBIDDEN
+FORBIDDEN = (
+    "destructive writes",
+    "changes outside the stated write scope",
+    "conclusions beyond the requested evidence",
+)
 
 
 class SubmitRefused(Exception):
@@ -264,7 +262,7 @@ def fingerprint(project_root: Path, role: str, title: str, value: dict[str, Any]
 
 
 def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any]) -> str:
-    own_forbidden = [item for item in value.get("forbidden", []) if item not in FORBIDDEN]
+    forbidden = list(dict.fromkeys([*FORBIDDEN, *value.get("forbidden", [])]))
     context = [name for name in CONTEXT_FILES if (project_root / name).exists()]
     lines = [
         f"Project root: {project_root}",
@@ -310,11 +308,8 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
             "do not create files in .claude, /tmp, or elsewhere. "
             "Deliver tables and catalogs in the report field, not as files."
         )
-    lines.append("Do not (always):")
-    lines.extend(f"- {item}" for item in FORBIDDEN)
-    if own_forbidden:
-        lines.append("The packet's forbidden list (do not):")
-        lines.extend(f"- {item}" for item in own_forbidden)
+    lines.append("Do not:")
+    lines.extend(f"- {item}" for item in forbidden)
     if plan.common_instructions:
         lines.append("Instructions common to all roles:")
         lines.append(plan.common_instructions.strip())
@@ -340,12 +335,8 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
     lines.append(
         "Each blocker is an object with a reason and a text. The reason is "
         "environment when a tool, host or sandbox failure prevented the work or check, "
-        "not_done when planned work or verification is unfinished, and "
-        "forbidden_by_packet when the packet itself prohibited a check. "
-        "A forbidden_by_packet blocker must also carry forbidden_item, set to the exact "
-        "string of the entry in the packet's forbidden list that prohibited the check "
-        "(the entries under 'Do not (always)' are not part of that list); "
-        "without an exact match it is treated as not_done. Otherwise forbidden_item is null."
+        "and not_done when planned work or verification is unfinished. "
+        "A check the packet prohibits is not a blocker; report it in observed_facts or report."
     )
     lines.append("")
     # Only one backend can be handed a schema, so the shape is stated here for

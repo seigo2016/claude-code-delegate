@@ -7,7 +7,7 @@ glance has moved the cost back into the session that delegated it.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 MAX_ITEMS = 5
@@ -19,32 +19,17 @@ MAX_COUNT_NAME_CHARS = 120
 MAX_REMAINING = 10
 MAX_REMAINING_CHARS = 200
 EVIDENCE_FIELDS = ("observed_facts", "verified_comparisons", "artifact_paths", "blockers")
-#: Why a blocker is there. ``not_done`` is the only one that says work or
-#: verification is unfinished, so it is also what an unrecognised reason becomes.
-BLOCKER_REASONS = ("forbidden_by_packet", "environment", "not_done")
+#: Why a blocker is there. ``not_done`` says work or verification is unfinished, so
+#: it is also what a legacy string or an unrecognised reason becomes.
+BLOCKER_REASONS = ("environment", "not_done")
 UNFINISHED = "not_done"
 FIELDS = ("status", *EVIDENCE_FIELDS, "decision_needed")
 OPTIONAL_FIELDS = ("report", "counts", "coverage")
 STATUSES = ("completed", "decision_needed", "unverified")
 
 
-#: Prohibitions every prompt lists, separately from the packet's own ``forbidden`` entries.
-#: A blocker cannot cite these: they would excuse any unfinished work.
-BUILT_IN_FORBIDDEN = (
-    "destructive writes",
-    "changes outside the stated write scope",
-    "conclusions beyond the requested evidence",
-)
-
-
-def normalize_blocker(item: Any, forbidden: Sequence[str] | None = None) -> Any:
+def normalize_blocker(item: Any) -> Any:
     """A blocker as ``{reason, text}``; a bare string (legacy) is ``not_done``.
-
-    A worker declares its own reason, so ``forbidden_by_packet`` is believed only
-    when ``forbidden_item`` is exactly one of the packet's ``forbidden`` entries;
-    otherwise the blocker is ``not_done``. The field is optional; because a strict
-    output schema must list every property, ``null`` is accepted and dropped.
-    ``forbidden=None`` skips that check, for a result already normalised against its packet.
 
     Anything that is not a string or an object with a string ``text`` is returned
     unchanged so that ``violations`` reports it.
@@ -53,19 +38,7 @@ def normalize_blocker(item: Any, forbidden: Sequence[str] | None = None) -> Any:
         return {"reason": UNFINISHED, "text": item}
     if isinstance(item, dict) and isinstance(item.get("text"), str):
         reason = item.get("reason")
-        if reason not in BLOCKER_REASONS:
-            reason = UNFINISHED
-        declared = item.get("forbidden_item")
-        if (
-            reason == "forbidden_by_packet"
-            and forbidden is not None
-            and (not isinstance(declared, str) or declared not in forbidden)
-        ):
-            reason = UNFINISHED
-        normalized = {"reason": reason, "text": item["text"]}
-        if reason == "forbidden_by_packet" and isinstance(declared, str):
-            normalized["forbidden_item"] = declared
-        return normalized
+        return {"reason": reason if reason in BLOCKER_REASONS else UNFINISHED, "text": item["text"]}
     return item
 
 
@@ -73,37 +46,47 @@ def _is_unfinished(item: Any) -> bool:
     return isinstance(item, dict) and item.get("reason") == UNFINISHED
 
 
-def has_unfinished_blocker(result: dict[str, Any]) -> bool:
-    blockers = result.get("blockers")
-    return isinstance(blockers, list) and any(_is_unfinished(item) for item in blockers)
+@dataclass(frozen=True)
+class Judgement:
+    """How a run ended, decided from the worker's raw answer alone."""
+
+    result: dict[str, Any] | None
+    #: The task's terminal status; ``failed`` when the answer cannot be delivered.
+    status: str
+    terminal_reason: str
+    #: Write work the worker admits is unfinished: resume it, or fail at the limit.
+    needs_resume: bool = False
+    problems: tuple[str, ...] = ()
 
 
-def has_environment_blocker(result: dict[str, Any]) -> bool:
-    blockers = result.get("blockers")
-    return isinstance(blockers, list) and any(
-        isinstance(item, dict) and item.get("reason") == "environment" for item in blockers
-    )
+def judge(raw: Any, *, writes_allowed: bool) -> Judgement:
+    """Every terminal decision about a worker's answer, in one place.
 
-
-def settle(result: dict[str, Any], *, writes_allowed: bool) -> dict[str, Any]:
-    """A ``completed`` result that admits it could not verify is ``unverified``.
-
-    That is unfinished work (read-only roles) or an environment failure (any
-    role: resuming in the same environment would fail again). Unfinished work in
-    a write-capable result is ``incomplete_write_work``'s to handle, so it is left
-    alone here. A valid ``forbidden_by_packet`` blocker changes nothing.
+    ``completed`` with a ``not_done`` blocker is unfinished work: a write-capable
+    role resumes it (``needs_resume``), a read-only role ends ``unverified``.
+    ``completed`` with only ``environment`` blockers ends ``unverified`` for every
+    role, as resuming in the same environment would fail again. Other statuses stand.
     """
-    if result.get("status") != "completed":
-        return result
-    unfinished = has_unfinished_blocker(result)
-    if (unfinished and not writes_allowed) or (
-        has_environment_blocker(result) and not (writes_allowed and unfinished)
+    if raw is None:
+        return Judgement(None, "failed", "empty_result")
+    result = sanitize(raw, writes_allowed=writes_allowed)
+    problems = violations(result, writes_allowed=writes_allowed)
+    if problems:
+        return Judgement(result, "failed", "invalid_result", problems=tuple(problems))
+    declared = result["status"]
+    reasons = {item["reason"] for item in result["blockers"]}
+    if writes_allowed and (
+        (declared in {"completed", "unverified"} and result.get("work_complete") is False)
+        or (declared == "completed" and UNFINISHED in reasons)
     ):
-        return {**result, "status": "unverified"}
-    return result
+        return Judgement(result, "failed", "incomplete_work", needs_resume=True)
+    if declared == "completed" and reasons:
+        reason = "normal_exit" if UNFINISHED in reasons else "environment_blocked"
+        return Judgement({**result, "status": "unverified"}, "unverified", reason)
+    return Judgement(result, declared, "normal_exit")
 
 
-def sanitize(result: Any, *, writes_allowed: bool = False, forbidden: Sequence[str] = ()) -> Any:
+def sanitize(result: Any, *, writes_allowed: bool = False) -> Any:
     """Coerce a near-valid envelope into shape where possible.
 
     Workers (especially external models) often produce envelopes that are
@@ -112,7 +95,7 @@ def sanitize(result: Any, *, writes_allowed: bool = False, forbidden: Sequence[s
     - Evidence lists exceeding MAX_ITEMS (truncated to MAX_ITEMS)
     - Extraneous metadata keys (e.g. toolAction, toolSummary, reasoning)
     - Missing 'decision_needed' or 'blockers' when status is 'completed'
-    - Blocker reasons the packet does not back (see ``normalize_blocker``)
+    - Blocker reasons that are unknown (see ``normalize_blocker``)
     """
     if not isinstance(result, dict):
         return result
@@ -128,7 +111,7 @@ def sanitize(result: Any, *, writes_allowed: bool = False, forbidden: Sequence[s
         if field in result:
             cleaned[field] = result[field]
             if field == "blockers" and isinstance(cleaned[field], list):
-                cleaned[field] = [normalize_blocker(item, forbidden) for item in cleaned[field]]
+                cleaned[field] = [normalize_blocker(item) for item in cleaned[field]]
         elif field == "blockers" and result.get("status") == "completed":
             cleaned["blockers"] = []
     cleaned = chair_display(cleaned)
@@ -199,17 +182,6 @@ def _shortened(item: Any) -> Any:
     return item
 
 
-def incomplete_write_work(result: dict[str, Any], *, writes_allowed: bool) -> bool:
-    """Identify explicitly unfinished write work; legacy unknown remains distinct."""
-    return writes_allowed and (
-        (
-            result.get("status") in {"completed", "unverified"}
-            and result.get("work_complete") is False
-        )
-        or (result.get("status") == "completed" and has_unfinished_blocker(result))
-    )
-
-
 def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
     """Every reason ``result`` is not a valid envelope, in reading order."""
     if not isinstance(result, dict):
@@ -239,10 +211,9 @@ def violations(result: Any, *, writes_allowed: bool = False) -> list[str]:
         if field == "blockers":
             well_formed = isinstance(value, list) and all(
                 isinstance(item, dict)
-                and set(item) in ({"reason", "text"}, {"reason", "text", "forbidden_item"})
+                and set(item) == {"reason", "text"}
                 and item["reason"] in BLOCKER_REASONS
                 and isinstance(item["text"], str)
-                and isinstance(item.get("forbidden_item", ""), str)
                 for item in value
             )
             if not well_formed:
@@ -369,11 +340,10 @@ def json_schema(*, writes_allowed: bool = False) -> dict[str, Any]:
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["reason", "text", "forbidden_item"],
+                    "required": ["reason", "text"],
                     "properties": {
                         "reason": {"type": "string", "enum": list(BLOCKER_REASONS)},
                         "text": {"type": "string", "maxLength": 4000},
-                        "forbidden_item": {"type": ["string", "null"], "maxLength": 4000},
                     },
                 },
             },
