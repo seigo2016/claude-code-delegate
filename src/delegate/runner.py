@@ -85,13 +85,17 @@ def worker_environment() -> dict[str, str]:
 
 
 def _packet_forbidden(task_dir: Path) -> list[str]:
-    """Every prohibition the prompt listed, which a blocker may cite by name."""
+    """The packet's own ``forbidden`` entries, which a blocker may cite by name.
+
+    The built-in prohibitions are left out on purpose: every prompt carries them,
+    so citing one would let any unfinished work keep ``completed``.
+    """
     try:
         value = store.read_json(task_dir / "packet.json").get("forbidden", [])
     except (OSError, ValueError, AttributeError):
-        value = []
+        return []
     own = [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
-    return [*envelope.BUILT_IN_FORBIDDEN, *own]
+    return [item for item in own if item not in envelope.BUILT_IN_FORBIDDEN]
 
 
 def _keep_last_message(

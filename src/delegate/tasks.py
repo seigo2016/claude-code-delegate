@@ -139,7 +139,7 @@ def fingerprint(project_root: Path, role: str, title: str, value: dict[str, Any]
 
 
 def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any]) -> str:
-    forbidden = list(dict.fromkeys([*FORBIDDEN, *value.get("forbidden", [])]))
+    own_forbidden = [item for item in value.get("forbidden", []) if item not in FORBIDDEN]
     context = [name for name in CONTEXT_FILES if (project_root / name).exists()]
     lines = [
         f"Project root: {project_root}",
@@ -181,8 +181,11 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
             "do not create files in .claude, /tmp, or elsewhere. "
             "Deliver tables and catalogs in the report field, not as files."
         )
-    lines.append("Do not:")
-    lines.extend(f"- {item}" for item in forbidden)
+    lines.append("Do not (always):")
+    lines.extend(f"- {item}" for item in FORBIDDEN)
+    if own_forbidden:
+        lines.append("The packet's forbidden list (do not):")
+        lines.extend(f"- {item}" for item in own_forbidden)
     if plan.role.instructions:
         lines.append("Role instructions:")
         lines.append(plan.role.instructions.strip())
@@ -208,7 +211,8 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
         "not_done when planned work or verification is unfinished, and "
         "forbidden_by_packet when the packet itself prohibited a check. "
         "A forbidden_by_packet blocker must also carry forbidden_item, set to the exact "
-        "string of the entry in the packet's forbidden list that prohibited the check; "
+        "string of the entry in the packet's forbidden list that prohibited the check "
+        "(the entries under 'Do not (always)' are not part of that list); "
         "without an exact match it is treated as not_done. Otherwise forbidden_item is null."
     )
     lines.append("")

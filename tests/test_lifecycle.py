@@ -715,10 +715,10 @@ def test_the_missing_reads_refusal_points_to_read_optional_for_paths_in_question
     assert "read_optional" in refused["error"]
 
 
-def test_read_only_task_keeps_completed_when_citing_a_built_in_forbidden_entry(
+def test_read_only_task_citing_a_built_in_forbidden_entry_ends_unverified(
     workspace: Workspace,
 ) -> None:
-    # The prompt lists the built-in entries together with the packet's own.
+    # Every prompt carries the built-in entries, so citing one excuses nothing.
     blocker = {
         "reason": "forbidden_by_packet",
         "text": "did not overwrite the data",
@@ -726,7 +726,7 @@ def test_read_only_task_keeps_completed_when_citing_a_built_in_forbidden_entry(
     }
     workspace.script({"blockers": [blocker]})
     handle = workspace.submit()
-    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "completed"
+    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "unverified"
 
 
 def test_read_only_task_with_not_done_and_environment_is_not_reported_as_environment(
@@ -738,3 +738,16 @@ def test_read_only_task_with_not_done_and_environment_is_not_reported_as_environ
     handle = workspace.submit()
     state = wait_for_terminal(workspace, handle["task_id"])
     assert (state["status"], state["terminal_reason"]) == ("unverified", "normal_exit")
+
+
+def test_resume_record_shows_the_settled_status_of_the_resumed_attempt(
+    workspace: Workspace,
+) -> None:
+    workspace.script(
+        {"work_complete": True, "blockers": [not_done("tests not written")]},
+        {"work_complete": True, "blockers": [{"reason": "environment", "text": "ssh down"}]},
+    )
+    handle = workspace.submit(packet=write_packet(), role="bounded-implementer")
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert (state["status"], state["terminal_reason"]) == ("unverified", "environment_blocked")
+    assert state["resume_results"][0]["outcome"] == "unverified"

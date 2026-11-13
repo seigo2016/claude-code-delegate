@@ -28,7 +28,8 @@ OPTIONAL_FIELDS = ("report", "counts", "coverage")
 STATUSES = ("completed", "decision_needed", "unverified")
 
 
-#: Prohibitions every prompt lists before the packet's own ``forbidden`` entries.
+#: Prohibitions every prompt lists, separately from the packet's own ``forbidden`` entries.
+#: A blocker cannot cite these: they would excuse any unfinished work.
 BUILT_IN_FORBIDDEN = (
     "destructive writes",
     "changes outside the stated write scope",
