@@ -418,8 +418,8 @@ def submit(
     missing_reads = packet_module.missing_reads(value, project_root)
     if missing_reads:
         raise SubmitRefused(
-            "packet reads do not exist; list paths the worker may create or that may be absent "
-            "in read_optional",
+            "packet reads do not exist; paths whose existence is itself the question, "
+            "or that the worker will create, belong in read_optional",
             missing_reads=missing_reads,
         )
     try:

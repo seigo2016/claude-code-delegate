@@ -52,7 +52,12 @@ def missing_reads(value: dict[str, Any], project_root: Path) -> list[str]:
     for entry in value["read"]:
         if "://" in entry or GLOB_CHARACTERS & set(entry):
             continue
-        path = Path(entry).expanduser()
+        try:
+            path = Path(entry).expanduser()
+        except RuntimeError:
+            # ``~nosuchuser/x`` has no home to resolve against, so nothing is there to read.
+            missing.append(entry)
+            continue
         if not (path if path.is_absolute() else project_root / path).exists():
             missing.append(entry)
     return missing

@@ -706,3 +706,13 @@ def test_a_malformed_blocker_ends_invalid_result_not_supervisor_error(
     assert state["terminal_reason"] == "invalid_result"
     assert state["result_problems"]
 
+
+
+def test_the_missing_reads_refusal_points_to_read_optional_for_paths_in_question(
+    workspace: Workspace,
+) -> None:
+    packet = json.dumps({**json.loads(PACKET), "read": ["~nosuchuser-zz/x.md"]})
+    refused = workspace.submit(packet=packet)
+    assert refused["missing_reads"] == ["~nosuchuser-zz/x.md"]
+    assert "existence is itself the question" in refused["error"]
+    assert "read_optional" in refused["error"]

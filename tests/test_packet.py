@@ -72,3 +72,8 @@ def test_missing_reads_skips_globs(tmp_path: Path, entry: str) -> None:
 def test_missing_reads_ignores_urls_and_read_optional(tmp_path: Path) -> None:
     value = {**valid(), "read": ["https://example.test/x"], "read_optional": ["not/yet.md"]}
     assert packet.missing_reads(value, tmp_path) == []
+
+
+def test_missing_reads_reports_an_entry_that_cannot_be_expanded(tmp_path: Path) -> None:
+    value = {**valid(), "read": ["~nosuchuser-zz/x.md"]}
+    assert packet.missing_reads(value, tmp_path) == ["~nosuchuser-zz/x.md"]
