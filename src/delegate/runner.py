@@ -85,12 +85,13 @@ def worker_environment() -> dict[str, str]:
 
 
 def _packet_forbidden(task_dir: Path) -> list[str]:
-    """The packet's own ``forbidden`` entries, which a blocker may cite by name."""
+    """Every prohibition the prompt listed, which a blocker may cite by name."""
     try:
         value = store.read_json(task_dir / "packet.json").get("forbidden", [])
     except (OSError, ValueError, AttributeError):
-        return []
-    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+        value = []
+    own = [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+    return [*envelope.BUILT_IN_FORBIDDEN, *own]
 
 
 def _keep_last_message(
@@ -355,7 +356,7 @@ def _supervise(task_dir: Path, state: dict[str, Any], adapter: WorkerAdapter) ->
                         if fields["unauthorized_writes"]
                         else "incomplete_work"
                         if incomplete
-                        else str(sanitized["status"])
+                        else str(envelope.settle(sanitized, writes_allowed=True)["status"])
                         if valid
                         else "invalid_or_empty_result"
                     ),
@@ -611,7 +612,10 @@ def _finish(
     # An environment failure that turned completed into unverified is the cause
     # a reader needs to see, and no resume could fix it.
     blocked = (
-        declared_complete and terminal == "unverified" and envelope.has_environment_blocker(result)
+        declared_complete
+        and terminal == "unverified"
+        and envelope.has_environment_blocker(result)
+        and not envelope.has_unfinished_blocker(result)
     )
     events.emit(
         task_dir,

@@ -41,11 +41,7 @@ _SHAPE = {
     "coverage": {"done": 0, "total": 0, "remaining": ["unfinished item"]},
     "work_complete": "boolean: whether all objective implementation is complete",
 }
-FORBIDDEN = (
-    "destructive writes",
-    "changes outside the stated write scope",
-    "conclusions beyond the requested evidence",
-)
+FORBIDDEN = envelope.BUILT_IN_FORBIDDEN
 
 
 class SubmitRefused(Exception):

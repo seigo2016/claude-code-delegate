@@ -713,3 +713,28 @@ def test_the_missing_reads_refusal_points_to_read_optional_for_paths_in_question
     assert refused["missing_reads"] == ["~nosuchuser-zz/x.md"]
     assert "existence is itself the question" in refused["error"]
     assert "read_optional" in refused["error"]
+
+
+def test_read_only_task_keeps_completed_when_citing_a_built_in_forbidden_entry(
+    workspace: Workspace,
+) -> None:
+    # The prompt lists the built-in entries together with the packet's own.
+    blocker = {
+        "reason": "forbidden_by_packet",
+        "text": "did not overwrite the data",
+        "forbidden_item": "destructive writes",
+    }
+    workspace.script({"blockers": [blocker]})
+    handle = workspace.submit()
+    assert wait_for_terminal(workspace, handle["task_id"])["status"] == "completed"
+
+
+def test_read_only_task_with_not_done_and_environment_is_not_reported_as_environment(
+    workspace: Workspace,
+) -> None:
+    workspace.script(
+        {"blockers": [not_done("third file unread"), {"reason": "environment", "text": "ssh"}]}
+    )
+    handle = workspace.submit()
+    state = wait_for_terminal(workspace, handle["task_id"])
+    assert (state["status"], state["terminal_reason"]) == ("unverified", "normal_exit")

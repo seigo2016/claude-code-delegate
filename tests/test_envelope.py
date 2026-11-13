@@ -384,3 +384,8 @@ def test_chair_display_does_not_crash_on_malformed_counts_or_coverage() -> None:
     ):
         shown = envelope.chair_display({**base, **extra})
         assert shown["status"] == "completed"
+
+
+def test_normalize_blocker_without_a_forbidden_list_keeps_the_stated_reason() -> None:
+    item = {"reason": "forbidden_by_packet", "text": "not run"}
+    assert envelope.normalize_blocker(item, None) == item

@@ -28,6 +28,14 @@ OPTIONAL_FIELDS = ("report", "counts", "coverage")
 STATUSES = ("completed", "decision_needed", "unverified")
 
 
+#: Prohibitions every prompt lists before the packet's own ``forbidden`` entries.
+BUILT_IN_FORBIDDEN = (
+    "destructive writes",
+    "changes outside the stated write scope",
+    "conclusions beyond the requested evidence",
+)
+
+
 def normalize_blocker(item: Any, forbidden: Sequence[str] | None = None) -> Any:
     """A blocker as ``{reason, text}``; a bare string (legacy) is ``not_done``.
 
@@ -47,12 +55,14 @@ def normalize_blocker(item: Any, forbidden: Sequence[str] | None = None) -> Any:
         if reason not in BLOCKER_REASONS:
             reason = UNFINISHED
         declared = item.get("forbidden_item")
-        if reason == "forbidden_by_packet" and (
-            not isinstance(declared, str) or (forbidden is not None and declared not in forbidden)
+        if (
+            reason == "forbidden_by_packet"
+            and forbidden is not None
+            and (not isinstance(declared, str) or declared not in forbidden)
         ):
             reason = UNFINISHED
         normalized = {"reason": reason, "text": item["text"]}
-        if reason == "forbidden_by_packet":
+        if reason == "forbidden_by_packet" and isinstance(declared, str):
             normalized["forbidden_item"] = declared
         return normalized
     return item
