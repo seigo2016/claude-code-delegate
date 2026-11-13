@@ -273,6 +273,10 @@ non-default root carries `task_root`, which the completion hook, its per-session
 registry and `watch-group.json` pass along; entries without it mean the default
 root, so older ones keep working. Give the same `--task-root` to the later
 commands, since `collect` cannot guess where a task was stored.
+The completion notice, the `reconcile` list and the session-start hook name a task's
+`task_root` in each line when it is not the default and say to pass it with the
+printed `--project-root`; the session-start hook also looks in every task root that
+the session's watch registries point to, not only the project's default one.
  The submit handle and completion notification
 carry the resolved root so cross-repository tasks are collected from the same
 ledger they were submitted to. One Bash call may submit several independent

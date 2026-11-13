@@ -219,8 +219,12 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 
 
 def _line(state: dict[str, Any]) -> dict[str, Any]:
-    """One task, short enough to read at a glance in a session start."""
-    return {
+    """One task, short enough to read at a glance in a session start.
+
+    A task kept away from the project's default ledger names it, since the reader
+    needs ``--task-root`` to find the task again.
+    """
+    line = {
         "task_id": state["task_id"],
         "project_root": state["project_root"],
         "title": state["title"],
@@ -229,6 +233,30 @@ def _line(state: dict[str, Any]) -> dict[str, Any]:
         "terminal_reason": state.get("terminal_reason"),
         "collected": bool(state.get("delivered_at")),
     }
+    named = tasks.explicit_root(Path(state["project_root"]), state.get("task_root"))
+    if named is not None:
+        line["task_root"] = str(named)
+    return line
+
+
+COLLECT_NEXT_ACTION = "collect each ready task once"
+TASK_ROOT_NOTE = "; pass --project-root and --task-root as printed for a task that has a task_root"
+
+
+def _next_action(lines: list[dict[str, Any]]) -> str | None:
+    if not lines:
+        return None
+    if any("task_root" in line for line in lines):
+        return COLLECT_NEXT_ACTION + TASK_ROOT_NOTE
+    return COLLECT_NEXT_ACTION
+
+
+def _wake_notice(states: list[dict[str, Any]]) -> dict[str, Any]:
+    lines = [_line(state) for state in states]
+    notice: dict[str, Any] = {"ready": lines}
+    if any("task_root" in line for line in lines):
+        notice["next_action"] = _next_action(lines)
+    return notice
 
 
 def _states(ledger: Path) -> list[dict[str, Any]]:
@@ -262,14 +290,31 @@ def _reconcile_state(state: dict[str, Any]) -> dict[str, Any]:
     return events.emit(task_dir, "orphaned", terminal_reason="worker_gone")
 
 
+def _session_ledgers(session_id: str, known: Path) -> list[Path]:
+    """The other task roots this session has tasks in, from its watch registries."""
+    found: list[Path] = []
+    for entry in [
+        *tasks.pending_completion_watches(session_id),
+        *_read_session_watches(session_id),
+    ]:
+        named = tasks.explicit_root(Path(entry["project_root"]), entry.get("task_root"))
+        if named is not None and named != known and named not in found:
+            found.append(named)
+    return found
+
+
 def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> int:
     project_root = _root(args.project_root)
     # A manual call is a session unless it names an owner, and is shown only what
     # it could collect: offering it another kind's task ends in owner_mismatch.
     caller = _caller(args)
+    ledgers = [_ledger(args, project_root)]
+    if session_id:
+        ledgers.extend(_session_ledgers(session_id, ledgers[0]))
     reconciled = [
         _reconcile_state(state)
-        for state in _states(_ledger(args, project_root))
+        for ledger in ledgers
+        for state in _states(ledger)
         if (session_id is None and not _owner_mismatch(state, caller))
         or (
             session_id is not None
@@ -286,7 +331,7 @@ def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> in
         {
             "tasks": [_line(state) for state in reconciled],
             "ready": ready,
-            "next_action": "collect each ready task once" if ready else None,
+            "next_action": _next_action(ready),
         }
     )
     return 0
@@ -614,7 +659,7 @@ def _wait_for_tasks(watched: list[Watch]) -> int:
             if state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
         ]
         if ready:
-            _print({"ready": [_line(state) for state in ready]})
+            _print(_wake_notice(ready))
             return WAKE
         if (
             not any(state["status"] in events.ACTIVE_STATES for state in states)
@@ -640,7 +685,7 @@ def _wait_for_something_to_collect(ledger: Path, caller: dict[str, Any]) -> int:
             if state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
         ]
         if ready:
-            _print({"ready": [_line(state) for state in ready]})
+            _print(_wake_notice(ready))
             return WAKE
         waiting = any(state["status"] in events.ACTIVE_STATES for state in states)
         if not waiting or time.monotonic() >= deadline:

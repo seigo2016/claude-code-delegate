@@ -144,3 +144,88 @@ def test_the_session_hook_finds_a_task_under_another_task_root(
     wait_for_terminal_at(workspace, second["task_id"], ("--task-root", str(ledger)))
     delivery = workspace.run("collect", second["task_id"], "--task-root", str(ledger))
     assert delivery["status"] == "completed"
+
+
+def run_hook(
+    workspace: Workspace, name: str, hook_input: dict, *args: str, cwd: Path
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "delegate", name, *args],
+        input=json.dumps(hook_input),
+        capture_output=True,
+        text=True,
+        env={**workspace.env, "DELEGATE_WATCH_SEC": "20"},
+        cwd=cwd,
+    )
+
+
+def test_a_session_task_under_another_task_root_is_followed_by_both_hooks(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
+    ledger = tmp_path / "ledger"
+    handle = workspace.submit("--task-root", str(ledger), expect_success=True)
+
+    # The wake notification names the task root and says to pass it.
+    woken = run_hook(
+        workspace,
+        "_hook-watch",
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "session_id": "session-1",
+            "tool_response": {"stdout": json.dumps(handle)},
+        },
+        cwd=tmp_path,
+    )
+    assert woken.returncode == WAKE
+    notice = json.loads(woken.stdout)
+    assert [(line["task_id"], line["task_root"]) for line in notice["ready"]] == [
+        (handle["task_id"], str(ledger))
+    ]
+    assert "--task-root" in notice["next_action"]
+
+    # A later session start finds the same task, though it is not in the default ledger.
+    started = run_hook(
+        workspace,
+        "_hook-reconcile",
+        {"session_id": "session-1"},
+        "--project-root",
+        str(workspace.repo),
+        cwd=tmp_path,
+    )
+    assert started.returncode == 0
+    listing = json.loads(started.stdout)
+    assert [line["task_id"] for line in listing["tasks"]] == [handle["task_id"]]
+    assert "--task-root" in listing["next_action"]
+
+    # And the printed values are enough to collect it.
+    line = listing["ready"][0]
+    delivery = workspace.run(
+        "collect",
+        line["task_id"],
+        "--project-root",
+        line["project_root"],
+        "--task-root",
+        line["task_root"],
+    )
+    assert delivery["status"] == "completed"
+
+    other = run_hook(
+        workspace,
+        "_hook-reconcile",
+        {"session_id": "session-2"},
+        "--project-root",
+        str(workspace.repo),
+        cwd=tmp_path,
+    )
+    assert json.loads(other.stdout)["tasks"] == []
+
+
+def test_default_ledger_lines_do_not_mention_a_task_root(workspace: Workspace) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
+    handle = workspace.submit(expect_success=True)
+    wait_for_terminal(workspace, handle["task_id"])
+    listing = workspace.run("reconcile")
+    assert "task_root" not in listing["ready"][0]
+    assert listing["next_action"] == "collect each ready task once"
