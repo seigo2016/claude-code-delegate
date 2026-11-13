@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -248,6 +249,17 @@ def _reconcile_state(state: dict[str, Any]) -> dict[str, Any]:
     return events.emit(task_dir, "orphaned", terminal_reason="worker_gone")
 
 
+def _reconciled(states: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """These states reconciled; a task whose directory cannot be written is skipped."""
+    found = []
+    for state in states:
+        try:
+            found.append(_reconcile_state(state))
+        except OSError:
+            continue
+    return found
+
+
 def _is_ready(state: dict[str, Any]) -> bool:
     return state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
 
@@ -266,9 +278,9 @@ def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> in
             return tasks.may_act(state, caller)
         return bool(session_id) and tasks.owner_of(state) == ("session", session_id)
 
-    reconciled = [
-        _reconcile_state(state) for state in _read_states(dict.fromkeys(task_dirs)) if wanted(state)
-    ]
+    reconciled = _reconciled(
+        state for state in _read_states(dict.fromkeys(task_dirs)) if wanted(state)
+    )
     ready = [_line(state) for state in reconciled if _is_ready(state)]
     _print(
         {
@@ -342,12 +354,15 @@ def _session_watches(session_id: str) -> list[Path]:
 def _prune_session_watches(session_id: str) -> None:
     for path, task_dirs in _session_watch_files(session_id):
         pending = _pending_session_watches(task_dirs)
-        if pending:
-            store.write_json(
-                path, {"session_id": session_id, "watch_tasks": _watch_entries(pending)}
-            )
-        else:
-            path.unlink(missing_ok=True)
+        try:
+            if pending:
+                store.write_json(
+                    path, {"session_id": session_id, "watch_tasks": _watch_entries(pending)}
+                )
+            else:
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def _owned_by_session(task_dirs: Iterable[Path], session_id: str) -> list[Path]:
@@ -367,8 +382,7 @@ def _pending_session_watches(task_dirs: list[Path]) -> list[Path]:
     """The watched tasks still running or waiting to be collected."""
     pending = []
     for task_dir in task_dirs:
-        for state in _read_states([task_dir]):
-            state = _reconcile_state(state)
+        for state in _reconciled(_read_states([task_dir])):
             if state["status"] in events.ACTIVE_STATES or _is_ready(state):
                 pending.append(task_dir)
     return pending
@@ -421,9 +435,20 @@ def _remember_watch_group(session_id: str, watched: list[Path]) -> None:
     if not watched:
         return
     group = {"watch_tasks": _watch_entries(watched)}
+    reachable = []
     for task_dir in watched:
-        store.write_json(task_dir / "watch-group.json", group)
-    store.write_json(_watch_group_path(session_id, watched), {"session_id": session_id, **group})
+        try:
+            store.write_json(task_dir / "watch-group.json", group)
+        except OSError:
+            continue
+        reachable.append(task_dir)
+    if not reachable:
+        return
+    with contextlib.suppress(OSError):
+        store.write_json(
+            _watch_group_path(session_id, reachable),
+            {"session_id": session_id, "watch_tasks": _watch_entries(reachable)},
+        )
 
 
 def _remaining_watch_tasks(task_dir: Path) -> list[dict[str, str]]:

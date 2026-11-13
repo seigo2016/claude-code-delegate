@@ -282,17 +282,22 @@ absolute `task_dir`; the hooks, their per-session registry and `watch-group.json
 record that path alone, so a task is followed wherever it is stored (entries from
 older versions, which name a `project_root` and `task_id`, still mean the default
 root). To collect a task, pass `--task-root` set to the parent of its `task_dir`.
-A watch entry whose directory is missing or unreadable is skipped, not fatal. One
+A task or registry entry a hook cannot reach (its directory is missing,
+unreadable, or cannot be written) is skipped, never fatal: the hook still reports
+every other task and its exit code depends only on the tasks it can reach. Such an
+entry is left out of the watch groups and pending entries the hook writes back. One
 Bash call may submit several independent tasks: the hook tracks every returned
 handle. After collecting one, it re-arms itself for any still-uncollected task from
 that same call.
 When Claude Code provides `CLAUDE_CODE_SESSION_ID`, submit records it and hooks
 only report that session's tasks. Pending watches are stored per session; legacy
 pending watches migrate when their owner runs the hook. Submissions without the
-ID do not wake a session. Manual `watch`, `reconcile`, and `collect`
-remain project-wide diagnostic commands; called as a session they leave bridge-owned
-tasks out, and with `--owner <id>` (`watch`, `reconcile`) they show only that
-owner's bridge tasks.
+ID do not wake a session. Manual `watch` and `reconcile` read every task in the task
+root and show only those the caller may act on: called as a session (the default) they leave bridge-owned
+tasks out, and with `--owner <id>` they show only that owner's bridge tasks. Hooks
+show only the tasks the hook's session submitted, wherever they are kept. `collect`
+and `cancel` act on one named task and refuse it (`owner_mismatch`) unless the
+caller may act on it.
 
 `submit --owner <id>` makes a bridge-owned task instead:
 `owner_kind` is `bridge`, no session is recorded, and no hook announces it.

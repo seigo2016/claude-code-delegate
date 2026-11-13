@@ -192,15 +192,21 @@ def pending_completion_watches(session_id: str | None = None) -> list[Path]:
             continue
         if path != _pending_path(session_id, task_dir):
             # Written by an older version, which named it differently.
-            register_completion_watch(task_dir, session_id)
-            path.unlink(missing_ok=True)
+            try:
+                register_completion_watch(task_dir, session_id)
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
         found.append(task_dir)
     return found
 
 
 def clear_pending_completion_watches(session_id: str, task_dirs: list[Path]) -> None:
     for task_dir in task_dirs:
-        _pending_path(session_id, task_dir).unlink(missing_ok=True)
+        try:
+            _pending_path(session_id, task_dir).unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def fingerprint(project_root: Path, role: str, title: str, value: dict[str, Any]) -> str:

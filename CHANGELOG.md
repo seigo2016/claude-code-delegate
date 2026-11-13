@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep one unreachable task from stopping the hooks: in `_hook-reconcile` and `_hook-watch`, a task or registry entry that raises `OSError` (a read-only or unreadable task root) is skipped and left out of what is written back, so the other tasks are still reported and the exit code (2 for a ready task) depends only on tasks the hook can reach.
 - Stop resubmitting to a broken worker: when a worker's three most recent terminal tasks in the task root all ended `failed` with the same worker-fault class (`auth_failed`, `launch_error`, `supervisor_error`), `submit` refuses with `worker_unhealthy` (exit 7) naming the worker, class, task ids and `--allow-unhealthy`, which overrides it and records `unhealthy_override`. A success ends the streak by itself; there is no cooldown.
 - Resolve a relative `--task-root`/`--config` against the current directory and record absolute paths, and leave a task root inside the project out of the write-scope accounting.
 - Stop nested delegation: workers run with `DELEGATE_WORKER=1` and `DELEGATE_PARENT_TASK=<task_id>`, `submit` refuses with `nested_submit` (exit 6) when `DELEGATE_WORKER` is set, and the worker prompt says the worker is not the Chair and must not delegate.
