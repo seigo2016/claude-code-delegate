@@ -26,7 +26,9 @@ def test_default_paths_are_unchanged_and_record_the_config(workspace: Workspace)
     state = wait_for_terminal(workspace, handle["task_id"])
 
     assert (workspace.repo / ".claude" / "logs" / "delegate" / handle["task_id"]).is_dir()
-    assert "task_root" not in handle
+    assert handle["task_dir"] == str(
+        workspace.repo / ".claude" / "logs" / "delegate" / handle["task_id"]
+    )
     assert state["config_path"] == str(workspace.settings)
     assert state["config_sha256"] == hashlib.sha256(workspace.settings.read_bytes()).hexdigest()
     assert workspace.run("collect", handle["task_id"])["status"] == "completed"
@@ -43,7 +45,7 @@ def test_a_task_with_config_and_task_root_is_stored_and_collected_there(
     handle = workspace.submit(
         "--config", str(config_path), "--task-root", str(ledger), role="only-here"
     )
-    assert handle["task_root"] == str(ledger)
+    assert handle["task_dir"] == str(ledger / handle["task_id"])
     assert (ledger / handle["task_id"] / "state.json").exists()
     assert not (workspace.repo / ".claude" / "logs").exists()
 
@@ -112,7 +114,7 @@ def test_the_session_hook_finds_a_task_under_another_task_root(
     workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
     ledger = tmp_path / "ledger"
     handle = workspace.submit("--task-root", str(ledger))
-    assert handle["task_root"] == str(ledger)
+    assert handle["task_dir"] == str(ledger / handle["task_id"])
 
     def hook(stdout: str) -> subprocess.CompletedProcess[str]:
         hook_input = {
@@ -140,7 +142,7 @@ def test_the_session_hook_finds_a_task_under_another_task_root(
     result = hook(json.dumps(second))
     assert result.returncode == WAKE
     group = json.loads((ledger / second["task_id"] / "watch-group.json").read_text())
-    assert group["watch_tasks"][0]["task_root"] == str(ledger)
+    assert group["watch_tasks"][0]["task_dir"] == str(ledger / second["task_id"])
     wait_for_terminal_at(workspace, second["task_id"], ("--task-root", str(ledger)))
     delivery = workspace.run("collect", second["task_id"], "--task-root", str(ledger))
     assert delivery["status"] == "completed"
@@ -166,7 +168,7 @@ def test_a_session_task_under_another_task_root_is_followed_by_both_hooks(
     ledger = tmp_path / "ledger"
     handle = workspace.submit("--task-root", str(ledger), expect_success=True)
 
-    # The wake notification names the task root and says to pass it.
+    # The wake notification names the task directory.
     woken = run_hook(
         workspace,
         "_hook-watch",
@@ -180,10 +182,9 @@ def test_a_session_task_under_another_task_root_is_followed_by_both_hooks(
     )
     assert woken.returncode == WAKE
     notice = json.loads(woken.stdout)
-    assert [(line["task_id"], line["task_root"]) for line in notice["ready"]] == [
-        (handle["task_id"], str(ledger))
+    assert [(line["task_id"], line["task_dir"]) for line in notice["ready"]] == [
+        (handle["task_id"], handle["task_dir"])
     ]
-    assert "--task-root" in notice["next_action"]
 
     # A later session start finds the same task, though it is not in the default ledger.
     started = run_hook(
@@ -197,17 +198,11 @@ def test_a_session_task_under_another_task_root_is_followed_by_both_hooks(
     assert started.returncode == 0
     listing = json.loads(started.stdout)
     assert [line["task_id"] for line in listing["tasks"]] == [handle["task_id"]]
-    assert "--task-root" in listing["next_action"]
 
     # And the printed values are enough to collect it.
     line = listing["ready"][0]
     delivery = workspace.run(
-        "collect",
-        line["task_id"],
-        "--project-root",
-        line["project_root"],
-        "--task-root",
-        line["task_root"],
+        "collect", line["task_id"], "--task-root", str(Path(line["task_dir"]).parent)
     )
     assert delivery["status"] == "completed"
 
@@ -220,15 +215,6 @@ def test_a_session_task_under_another_task_root_is_followed_by_both_hooks(
         cwd=tmp_path,
     )
     assert json.loads(other.stdout)["tasks"] == []
-
-
-def test_default_ledger_lines_do_not_mention_a_task_root(workspace: Workspace) -> None:
-    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
-    handle = workspace.submit(expect_success=True)
-    wait_for_terminal(workspace, handle["task_id"])
-    listing = workspace.run("reconcile")
-    assert "task_root" not in listing["ready"][0]
-    assert listing["next_action"] == "collect each ready task once"
 
 
 def test_relative_paths_resolve_against_the_current_directory_and_are_recorded_absolute(
@@ -252,46 +238,58 @@ def test_relative_paths_resolve_against_the_current_directory_and_are_recorded_a
     assert completed.returncode == 0, completed.stdout
     handle = json.loads(completed.stdout)
 
-    assert handle["task_root"] == str(here / "ledger")
+    assert handle["task_dir"] == str(here / "ledger" / handle["task_id"])
     state = json.loads((here / "ledger" / handle["task_id"] / "state.json").read_text())
     assert state["task_root"] == str(here / "ledger")
     assert state["config_path"] == str(here / "delegate.toml")
     assert Path(state["task_dir"]).is_absolute()
 
 
-def test_explicit_root_normalises_what_it_is_given(
-    workspace: Workspace, tmp_path: Path, monkeypatch
-) -> None:
-    from delegate import tasks
-
-    monkeypatch.chdir(tmp_path)
-    project = workspace.repo
-
-    assert tasks.explicit_root(project, "ledger") == tmp_path / "ledger"
-    assert (
-        tasks.explicit_root(project, str(project / ".claude" / "logs" / "x" / ".." / "delegate"))
-        is None
+def registry_file(workspace: Workspace, session_id: str, entries: list[dict]) -> None:
+    # Where the hooks under test keep their registry, as the same path.
+    path = (
+        Path(workspace.env["DELEGATE_WATCH_ROOT"])
+        / hashlib.sha256(session_id.encode()).hexdigest()
+        / "group.json"
     )
-    assert tasks.explicit_root(project, None) is None
-
-
-def test_submit_records_an_absolute_task_root_whatever_it_was_given(
-    workspace: Workspace, tmp_path: Path, monkeypatch
-) -> None:
-    from delegate import config, tasks
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("PATH", workspace.env["PATH"])
-    monkeypatch.setattr(tasks.subprocess, "Popen", lambda *a, **k: type("P", (), {"pid": 1})())
-    settings = config.parse(SETTINGS.encode(), Path("x.toml"))
-
-    handle = tasks.submit(
-        project_root=workspace.repo,
-        settings=settings,
-        role="artifact-auditor",
-        title="x",
-        value=json.loads(PACKET),
-        ledger=Path("relative-ledger"),
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"session_id": session_id, "watch_tasks": entries}), encoding="utf-8"
     )
 
-    assert handle["task_root"] == str(tmp_path / "relative-ledger")
+
+def test_legacy_entries_resolve_to_the_default_root_and_missing_ones_are_skipped(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-1"
+    handle = workspace.submit(expect_success=True)
+    wait_for_terminal(workspace, handle["task_id"])
+    registry_file(
+        workspace,
+        "session-1",
+        [
+            {"task_dir": str(tmp_path / "gone" / "task")},
+            {"project_root": str(workspace.repo), "task_id": "never-existed"},
+            {"project_root": str(workspace.repo), "task_id": handle["task_id"]},
+        ],
+    )
+
+    woken = run_hook(
+        workspace,
+        "_hook-watch",
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "session_id": "session-1",
+            "tool_response": {"stdout": "nothing useful"},
+        },
+        cwd=tmp_path,
+    )
+    assert woken.returncode == WAKE
+    assert [line["task_id"] for line in json.loads(woken.stdout)["ready"]] == [handle["task_id"]]
+
+    started = run_hook(
+        workspace, "_hook-reconcile", {"session_id": "session-1"}, cwd=workspace.repo
+    )
+    assert started.returncode == 0
+    assert [line["task_id"] for line in json.loads(started.stdout)["tasks"]] == [handle["task_id"]]

@@ -6,8 +6,6 @@ can get its handle and stop thinking about the task.
 
 from __future__ import annotations
 
-import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -15,9 +13,7 @@ import shutil
 import subprocess
 import sys
 import uuid
-from collections.abc import Generator
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +23,6 @@ from delegate.adapters import registry
 
 SETTINGS_FILE = Path(".claude") / "delegate.toml"
 TASK_ROOT = Path(".claude") / "logs" / "delegate"
-SUBMIT_LOCK = ".submit.lock"
 CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md")
 _SHAPE = {
     "status": "completed | decision_needed | unverified",
@@ -47,11 +42,14 @@ FORBIDDEN = (
     "conclusions beyond the requested evidence",
 )
 
+#: Who a task answers to, or who is asking: ``(kind, id)``.
+Owner = tuple[str, str | None]
+
 
 class SubmitRefused(Exception):
     """The request will not start a worker, and why."""
 
-    exit_code = 1
+    code = "submit_refused"
 
     def __init__(self, message: str, **detail: Any) -> None:
         super().__init__(message)
@@ -61,16 +59,28 @@ class SubmitRefused(Exception):
 class WorkerUnhealthy(SubmitRefused):
     """The worker's last runs all failed for a reason that lies with the worker."""
 
-    exit_code = 7
+    code = "worker_unhealthy"
+
+
+def owner_of(state: dict[str, Any]) -> Owner:
+    """Who a task answers to. State from before owners existed is a session task."""
+    return (
+        state.get("owner_kind", "session"),
+        state.get("owner_id", state.get("submitter_session_id")),
+    )
+
+
+def may_act(state: dict[str, Any], caller: Owner) -> bool:
+    """A bridge task answers only to its owner; a session task, to any session.
+
+    The id is stored in plain text: this guards against mistakes, not a hostile caller.
+    """
+    kind, owner_id = owner_of(state)
+    return caller == (kind, owner_id) if kind == "bridge" else caller[0] == "session"
 
 
 #: How many consecutive same-class failures make a worker unhealthy.
 UNHEALTHY_STREAK = 3
-#: ``failure_class`` values naming a credential the worker cannot use. ``auth_failed``
-#: is what the adapters produce (a 401/403, an authentication error type, or an
-#: ``api_key``/``auth`` code); the others are the names a hand-written or future
-#: adapter would likely give the same thing.
-AUTH_CLASSES = frozenset({"auth_failed", "auth_error", "api_key_expired"})
 #: ``terminal_reason`` values that mean the worker could not be run at all. Their
 #: ``failure_class`` is an exception name that varies, so the reason is what is compared.
 BROKEN_REASONS = frozenset({"launch_error", "supervisor_error"})
@@ -87,70 +97,38 @@ def worker_fault(state: dict[str, Any]) -> str | None:
     """
     if state.get("status") != "failed":
         return None
-    reason = state.get("terminal_reason")
-    if reason in BROKEN_REASONS:
-        return str(reason)
-    failure_class = state.get("failure_class")
-    if failure_class in AUTH_CLASSES:
-        return str(failure_class)
+    if state.get("terminal_reason") in BROKEN_REASONS:
+        return str(state["terminal_reason"])
+    if state.get("failure_class") == "auth_failed":
+        return "auth_failed"
     return None
 
 
-def _terminal_key(state: dict[str, Any]) -> tuple[datetime, str]:
-    return (datetime.fromisoformat(str(state["terminal_at"])), str(state.get("task_id")))
+def _all_states(root: Path) -> list[dict[str, Any]]:
+    found = []
+    for path in sorted(root.glob("*/state.json")):
+        try:
+            found.append(store.read_json(path))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return found
 
 
-@dataclass(frozen=True)
-class Health:
-    """A worker's unhealthy streak and when it may be tried again."""
-
-    failure_class: str
-    task_ids: list[str]
-    last_failure_at: datetime
-    until: datetime
-
-    def probing(self, now: datetime) -> bool:
-        """True once the cooldown is over: the next submit is a probe, not a retry."""
-        return now >= self.until
-
-
-def health_of(root: Path, worker: str, cooldown_hours: float) -> Health | None:
-    """The worker's unhealthy streak, when its last three terminal tasks all failed alike.
-
-    Newest first. A task of another outcome in between, or fewer than three tasks,
-    means the worker is not known to be broken. The cooldown runs from the last
-    failure of the streak, so a probe that fails again opens a new one.
-    """
-    if not root.exists():
-        return None
+def unhealthy_streak(root: Path, worker: str) -> tuple[str, list[str]] | None:
+    """``(class, task ids)`` when the worker's last three terminal tasks all failed alike."""
     finished = []
     for state in _all_states(root):
-        if state.get("worker") != worker or state.get("status") not in events.TERMINAL_STATES:
-            continue
-        try:
-            finished.append((_terminal_key(state), state))
-        except (KeyError, ValueError):
-            continue
+        if state.get("worker") == worker and state.get("status") in events.TERMINAL_STATES:
+            try:
+                finished.append((datetime.fromisoformat(str(state["terminal_at"])), state))
+            except (KeyError, ValueError):
+                continue
     finished.sort(key=lambda item: item[0], reverse=True)
-    latest = [(key, state) for key, state in finished[:UNHEALTHY_STREAK]]
-    if len(latest) < UNHEALTHY_STREAK:
+    latest = [state for _, state in finished[:UNHEALTHY_STREAK]]
+    classes = {worker_fault(state) for state in latest}
+    if len(latest) < UNHEALTHY_STREAK or len(classes) != 1 or None in classes:
         return None
-    classes = {worker_fault(state) for _, state in latest}
-    if len(classes) != 1 or None in classes:
-        return None
-    last = latest[0][0][0]
-    return Health(
-        failure_class=str(classes.pop()),
-        task_ids=[str(state["task_id"]) for _, state in latest],
-        last_failure_at=last,
-        until=last + timedelta(hours=cooldown_hours),
-    )
-
-
-def recent_unhealthy(root: Path, worker: str) -> tuple[str, list[str]] | None:
-    """``(class, task ids)`` of the worker's unhealthy streak, ignoring any cooldown."""
-    health = health_of(root, worker, 0)
-    return None if health is None else (health.failure_class, health.task_ids)
+    return str(classes.pop()), [str(state["task_id"]) for state in latest]
 
 
 def settings_path(project_root: Path) -> Path:
@@ -161,93 +139,67 @@ def task_root(project_root: Path) -> Path:
     return project_root / TASK_ROOT
 
 
-def explicit_root(project_root: Path, root: str | Path | None) -> Path | None:
-    """The task root a handle names, or ``None`` when it is the project's default.
+def entry_dir(entry: Any) -> Path | None:
+    """The task directory a watch or handle entry names, if it names one.
 
-    Handles, registry entries and watch groups written before ``--task-root`` existed
-    carry no root, and must keep meaning the default one.
+    Entries written before ``task_dir`` existed carry ``project_root`` and
+    ``task_id`` and mean a task under the project's default task root.
     """
-    if not isinstance(root, str | Path) or not str(root):
+    if not isinstance(entry, dict):
         return None
-    path = Path(root).expanduser().resolve()
-    return None if path == task_root(project_root).resolve() else path
+    if isinstance(entry.get("task_dir"), str):
+        return Path(entry["task_dir"])
+    if isinstance(entry.get("project_root"), str) and isinstance(entry.get("task_id"), str):
+        return task_root(Path(entry["project_root"])) / entry["task_id"]
+    return None
 
 
-def _completion_watch_registry_root() -> Path:
-    configured = os.environ.get("DELEGATE_WATCH_ROOT")
-    if configured:
-        return Path(configured)
-    return Path.home() / ".claude" / "delegate" / "watch-sessions"
-
-
-def _completion_watch_path(
-    session_id: str, project_root: Path, task_id: str, root: Path | None = None
-) -> Path:
-    identity = f"{project_root}\0{task_id}".encode()
-    if root is not None:
-        identity = f"{project_root}\0{task_id}\0{root}".encode()
-    return (
-        _completion_watch_registry_root()
-        / hashlib.sha256(session_id.encode()).hexdigest()
-        / "pending"
-        / (hashlib.sha256(identity).hexdigest() + ".json")
+def watch_registry_dir(session_id: str) -> Path:
+    root = Path(
+        os.environ.get("DELEGATE_WATCH_ROOT")
+        or Path.home() / ".claude" / "delegate" / "watch-sessions"
     )
+    return root / hashlib.sha256(session_id.encode()).hexdigest()
 
 
-def register_completion_watch(
-    project_root: Path, task_id: str, session_id: str | None, root: Path | None = None
-) -> None:
+def _pending_path(session_id: str, task_dir: Path) -> Path:
+    digest = hashlib.sha256(str(task_dir).encode()).hexdigest()
+    return watch_registry_dir(session_id) / "pending" / f"{digest}.json"
+
+
+def register_completion_watch(task_dir: Path, session_id: str | None) -> None:
     """Make a submitted task discoverable even if a shell pipeline hides its handle."""
-    if not session_id:
-        return
-    entry = {"project_root": str(project_root), "task_id": task_id}
-    if root is not None:
-        entry["task_root"] = str(root)
-    store.write_json(_completion_watch_path(session_id, project_root, task_id, root), entry)
+    if session_id:
+        store.write_json(_pending_path(session_id, task_dir), {"task_dir": str(task_dir)})
 
 
-def pending_completion_watches(session_id: str | None = None) -> list[dict[str, str]]:
+def pending_completion_watches(session_id: str | None = None) -> list[Path]:
+    """The task directories this session submitted and has not yet been told about."""
     if not session_id:
         return []
-    root = _completion_watch_registry_root()
-    found: list[dict[str, str]] = []
-    session_root = root / hashlib.sha256(session_id.encode()).hexdigest() / "pending"
-    legacy_root = root / "pending-submissions"
+    session_root = watch_registry_dir(session_id) / "pending"
+    legacy_root = watch_registry_dir(session_id).parent / "pending-submissions"
+    found: list[Path] = []
     for path in [*sorted(session_root.glob("*.json")), *sorted(legacy_root.glob("*.json"))]:
         try:
-            value = store.read_json(path)
+            task_dir = entry_dir(store.read_json(path))
+            if task_dir is None or owner_of(store.read_json(task_dir / "state.json")) != (
+                "session",
+                session_id,
+            ):
+                continue
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        if isinstance(value.get("project_root"), str) and isinstance(value.get("task_id"), str):
-            project = Path(value["project_root"])
-            root = explicit_root(project, value.get("task_root"))
-            try:
-                state = store.read_json(
-                    (root or task_root(project)) / value["task_id"] / "state.json"
-                )
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
-            owner = state.get("submitter_session_id")
-            if owner != session_id:
-                continue
-            if path.parent == legacy_root:
-                destination = _completion_watch_path(session_id, project, value["task_id"], root)
-                store.write_json(destination, value)
-                path.unlink(missing_ok=True)
-            entry = {"project_root": value["project_root"], "task_id": value["task_id"]}
-            if root is not None:
-                entry["task_root"] = str(root)
-            found.append(entry)
+        if path.parent == legacy_root:
+            register_completion_watch(task_dir, session_id)
+            path.unlink(missing_ok=True)
+        found.append(task_dir)
     return found
 
 
-def clear_pending_completion_watches(session_id: str, watches: list[dict[str, str]]) -> None:
-    if not session_id:
-        return
-    for watch in watches:
-        project = Path(watch["project_root"])
-        root = explicit_root(project, watch.get("task_root"))
-        _completion_watch_path(session_id, project, watch["task_id"], root).unlink(missing_ok=True)
+def clear_pending_completion_watches(session_id: str, task_dirs: list[Path]) -> None:
+    for task_dir in task_dirs:
+        _pending_path(session_id, task_dir).unlink(missing_ok=True)
 
 
 def fingerprint(project_root: Path, role: str, title: str, value: dict[str, Any]) -> str:
@@ -365,13 +317,7 @@ def compose_prompt(project_root: Path, plan: config.Plan, value: dict[str, Any])
 
 
 def _find_duplicate(
-    root: Path,
-    key: str,
-    owner_kind: str,
-    owner_id: str | None,
-    *,
-    fast: bool = False,
-    route_arm: str | None = None,
+    root: Path, key: str, owner: Owner, *, fast: bool, route_arm: str | None
 ) -> dict[str, Any] | None:
     """The identical task that is still running, if there is one.
 
@@ -379,18 +325,11 @@ def _find_duplicate(
     fresh question with an old answer, and the question is usually being asked
     again because something has changed since.
     """
-    if not root.exists():
-        return None
-    for path in sorted(root.glob("*/state.json"), reverse=True):
-        try:
-            state = store.read_json(path)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
+    for state in reversed(_all_states(root)):
         if (
             state.get("fingerprint") == key
             and state.get("status") in events.ACTIVE_STATES
-            and state.get("owner_kind", "session") == owner_kind
-            and state.get("owner_id", state.get("submitter_session_id")) == owner_id
+            and owner_of(state) == owner
             and state.get("fast", False) == fast
             # Two arms of a comparison are two runs, however alike their requests.
             and state.get("route_arm") == route_arm
@@ -400,9 +339,10 @@ def _find_duplicate(
 
 
 def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str, Any]:
-    handle = {
+    return {
         "task_id": state["task_id"],
         "project_root": state["project_root"],
+        "task_dir": state["task_dir"],
         "status": state["status"],
         "role": state["role"],
         "worker": state["worker"],
@@ -413,20 +353,6 @@ def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str,
         "next_action": "end_turn",
         "completion_delivery": "async_rewake",
     }
-    # Only a ledger away from the default is named, so a default handle stays as it was.
-    root = explicit_root(Path(state["project_root"]), state.get("task_root"))
-    if root is not None:
-        handle["task_root"] = str(root)
-    if state.get("health_probe"):
-        handle["health_probe"] = True
-    # A comparison that could not use the arm it chose says so where the caller looks.
-    if state.get("route_fallback_from"):
-        handle["route_fallback"] = {
-            "from": state["route_fallback_from"],
-            "to": state["worker"],
-            "reason": state.get("route_fallback_reason"),
-        }
-    return handle
 
 
 def _non_repo_relative(values: list[str]) -> list[str]:
@@ -499,152 +425,59 @@ def _preflight(plan: config.Plan, binary: str) -> None:
         )
 
 
-def _route(
-    settings: config.Settings, role: str, worker: str | None, root: Path
-) -> tuple[str | None, str | None, str | None]:
-    """Which worker to ask for, and why: ``(worker, route_arm, route_policy)``.
-
-    An explicit worker always wins. Otherwise a role that compares workers takes the
-    arm that has been asked for least (the first of them on a tie), counted over the
-    comparing tasks of that role already in the ledger.
-    """
-    if worker is not None:
-        return worker, None, "explicit"
-    role_def = settings.roles.get(role)
-    if role_def is None or not role_def.compare_workers:
-        return None, None, None
-    arms = role_def.compare_workers
-    asked = dict.fromkeys(arms, 0)
-    for state in _all_states(root):
-        if (
-            state.get("role") == role
-            and state.get("route_policy") == "compare"
-            and not _cancelled_before_start(state)
-        ):
-            # The arm asked for, not the one that ended up doing the work.
-            requested = state.get("route_fallback_from") or state.get("route_arm")
-            if requested in asked:
-                asked[requested] += 1
-    arm = min(arms, key=lambda name: asked[name])
-    return arm, arm, "compare"
-
-
-def _cancelled_before_start(state: dict[str, Any]) -> bool:
-    """A task that was stopped before its worker began took no turn in the comparison."""
-    return state.get("status") == "cancelled" and (
-        state.get("terminal_reason") == "cancelled_before_start" or not state.get("started_at")
-    )
-
-
-def _all_states(root: Path) -> list[dict[str, Any]]:
-    found = []
-    for path in sorted(root.glob("*/state.json")):
-        try:
-            found.append(store.read_json(path))
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-    return found
+def arm_for(task_id: str, arms: tuple[str, ...]) -> str:
+    """The comparison arm a task takes, by a stable hash of its id."""
+    return arms[hashlib.sha256(task_id.encode()).digest()[0] % len(arms)]
 
 
 def _candidates(
-    settings: config.Settings, role: str, chosen: str | None, route_policy: str | None
-) -> list[str | None]:
-    """The workers to try, in order: the one chosen, then (when comparing) the other arms."""
+    settings: config.Settings, role: str, worker: str | None, task_id: str
+) -> tuple[list[str | None], str | None]:
+    """The workers to try in order, and the route policy.
+
+    An explicit worker always wins. A role that compares two workers tries the
+    one its task id hashes to, then the other.
+    """
+    if worker is not None:
+        return [worker], "explicit"
     role_def = settings.roles.get(role)
-    if route_policy != "compare" or role_def is None or chosen not in role_def.compare_workers:
-        return [chosen]
-    arms = role_def.compare_workers
-    start = arms.index(str(chosen))
-    return [arms[(start + step) % len(arms)] for step in range(len(arms))]
+    if role_def is None or not role_def.compare_workers:
+        return [None], None
+    first = arm_for(task_id, role_def.compare_workers)
+    return [first, *(arm for arm in role_def.compare_workers if arm != first)], "compare"
 
 
-@dataclass(frozen=True)
-class _Arm:
-    plan: config.Plan
-    override: dict[str, Any] | None
-    probe: bool
-
-
-def _try_worker(
+def _runnable(
     settings: config.Settings,
     role: str,
     worker: str | None,
     fast: bool | None,
-    ledger_root: Path,
+    root: Path,
     *,
     allow_unhealthy: bool,
-    preflight: bool,
-) -> _Arm:
-    """The plan for one worker, how its health was waived if it was, or why it cannot run."""
+) -> tuple[config.Plan, dict[str, Any] | None]:
+    """The plan for one worker and how its health was waived, or why it cannot run."""
     plan = settings.plan(role, worker=worker, fast=fast)
     override: dict[str, Any] | None = None
-    probe = False
-    health = health_of(ledger_root, plan.worker, settings.worker_health_cooldown_hours)
-    if health is not None and allow_unhealthy:
-        override = {"failure_class": health.failure_class, "task_ids": health.task_ids}
-    elif health is not None and health.probing(datetime.now().astimezone()):
-        probe = True
-    elif health is not None:
-        until = health.until.isoformat(timespec="seconds")
-        raise WorkerUnhealthy(
-            "worker_unhealthy",
-            worker=plan.worker,
-            failure_class=health.failure_class,
-            task_ids=health.task_ids,
-            cooldown_until=until,
-            reason=(
+    streak = unhealthy_streak(root, plan.worker)
+    if streak is not None:
+        failure_class, task_ids = streak
+        if not allow_unhealthy:
+            raise WorkerUnhealthy(
                 f"the last {UNHEALTHY_STREAK} tasks of {plan.worker} all failed with "
-                f"{health.failure_class}; it is not tried again until {until} (cooldown "
-                f"{settings.worker_health_cooldown_hours:g} h after the last failure) - "
-                "wait for that, fix the worker, or pass --allow-unhealthy to retry now"
-            ),
-        )
-    if preflight:
-        try:
-            adapter = registry.get(plan.adapter)
-        except KeyError as error:
-            raise SubmitRefused(str(error)) from error
-        _preflight(plan, adapter.name)
-    return _Arm(plan, override, probe)
-
-
-def _reason(error: Exception) -> str:
-    detail = getattr(error, "detail", None)
-    if isinstance(detail, dict) and isinstance(detail.get("reason"), str):
-        return str(detail["reason"])
-    return str(error)
-
-
-@contextlib.contextmanager
-def _locked(root: Path) -> Generator[None, None, None]:
-    """Hold the task root's submit lock, waiting for whoever has it.
-
-    The arm a comparing role takes depends on the tasks already in the root, so
-    choosing it and recording the task must not interleave with another submit.
-    A root that this call had to create, and that the submit left empty (it was
-    refused), is removed again, so a refusal still leaves nothing behind.
-    """
-    existed = root.exists()
-    path = root / SUBMIT_LOCK
-    while True:
-        root.mkdir(parents=True, exist_ok=True)
-        lock = path.open("a+", encoding="utf-8")
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            # The file may have been removed by an earlier holder while we waited.
-            if os.fstat(lock.fileno()).st_ino == path.stat().st_ino:
-                break
-        except FileNotFoundError:
-            pass
-        lock.close()
+                f"{failure_class} ({', '.join(task_ids)}); fix the worker, or pass "
+                "--allow-unhealthy to submit anyway",
+                worker=plan.worker,
+                failure_class=failure_class,
+                task_ids=task_ids,
+            )
+        override = {"failure_class": failure_class, "task_ids": task_ids}
     try:
-        yield
-    finally:
-        if not existed and [entry.name for entry in root.iterdir()] == [SUBMIT_LOCK]:
-            path.unlink(missing_ok=True)
-            with contextlib.suppress(OSError):
-                root.rmdir()
-        lock.close()
+        adapter = registry.get(plan.adapter)
+    except KeyError as error:
+        raise SubmitRefused(str(error)) from error
+    _preflight(plan, adapter.name)
+    return plan, override
 
 
 def submit(
@@ -656,7 +489,7 @@ def submit(
     value: dict[str, Any],
     worker: str | None = None,
     fast: bool | None = None,
-    owner: str | None = None,
+    caller: Owner = ("session", None),
     config_path: Path | None = None,
     config_sha256: str | None = None,
     ledger: Path | None = None,
@@ -664,101 +497,44 @@ def submit(
 ) -> dict[str, Any]:
     """Create a task and start its worker.
 
-    A relative ``ledger`` is taken from the current directory, and the task records
-    its absolute form.
+    ``caller`` is who submits: a ``("bridge", id)`` task answers only to that id
+    and no hook announces it. ``ledger`` is an absolute task root.
     """
     packet_module.validate(value)
     if value["host_only"]:
         raise SubmitRefused("host_only work must stay in Claude Code", run_in="claude-code")
-    ledger_root = (
-        Path(ledger).expanduser().resolve() if ledger is not None else task_root(project_root)
-    )
-    with _locked(ledger_root):
-        return _submit(
-            project_root=project_root,
-            settings=settings,
-            role=role,
-            title=title,
-            value=value,
-            worker=worker,
-            fast=fast,
-            owner=owner,
-            config_path=config_path,
-            config_sha256=config_sha256,
-            ledger=ledger_root,
-            allow_unhealthy=allow_unhealthy,
-        )
-
-
-def _submit(
-    *,
-    project_root: Path,
-    settings: config.Settings,
-    role: str,
-    title: str,
-    value: dict[str, Any],
-    worker: str | None = None,
-    fast: bool | None = None,
-    owner: str | None = None,
-    config_path: Path | None = None,
-    config_sha256: str | None = None,
-    ledger: Path | None = None,
-    allow_unhealthy: bool = False,
-) -> dict[str, Any]:
-    ledger_root = ledger if ledger is not None else task_root(project_root)
-    chosen, route_arm, route_policy = _route(settings, role, worker, ledger_root)
+    root = ledger if ledger is not None else task_root(project_root)
+    task_id = str(uuid.uuid4())
+    candidates, route_policy = _candidates(settings, role, worker, task_id)
     key = fingerprint(project_root, role, title, value)
-    # An explicit owner makes a bridge task. It has no submitting session, so no
-    # Claude Code hook can match it.
-    owner_kind = "bridge" if owner else "session"
-    owner_id = owner or os.environ.get("CLAUDE_CODE_SESSION_ID") or None
-    submitter_session_id = None if owner else owner_id
     # An identical task still running is the answer, whatever the worker's health
     # is now: asking again must not be refused for the worker that is doing it.
     try:
-        first = settings.plan(role, worker=chosen, fast=fast)
+        first = settings.plan(role, worker=candidates[0], fast=fast)
     except config.ConfigError:
         pass
     else:
         running = _find_duplicate(
-            ledger_root, key, owner_kind, owner_id, fast=first.fast, route_arm=route_arm
+            root,
+            key,
+            caller,
+            fast=first.fast,
+            route_arm=first.worker if route_policy == "compare" else None,
         )
         if running is not None:
             return handle_of(running, deduplicated=True)
-    candidates = _candidates(settings, role, chosen, route_policy)
-    failures: list[tuple[str | None, Exception]] = []
-    arm: _Arm | None = None
+    failures: list[Exception] = []
     for candidate in candidates:
         try:
-            # With several arms to choose from, an arm that could not be started
-            # is skipped; with one, the checks below say what is wrong as before.
-            arm = _try_worker(
-                settings,
-                role,
-                candidate,
-                fast,
-                ledger_root,
-                allow_unhealthy=allow_unhealthy,
-                preflight=len(candidates) > 1,
+            plan, override = _runnable(
+                settings, role, candidate, fast, root, allow_unhealthy=allow_unhealthy
             )
+            break
         except (SubmitRefused, config.ConfigError) as error:
-            failures.append((candidate, error))
-            continue
-        break
-    if arm is None:
-        first = failures[0][1]
-        if isinstance(first, SubmitRefused) and len(failures) > 1:
-            first.detail["other_arms"] = [
-                {"worker": name, "reason": _reason(error)} for name, error in failures[1:]
-            ]
-        raise first
-    plan, override, health_probe = arm.plan, arm.override, arm.probe
-    fallback_from: str | None = None
-    fallback_reason: str | None = None
-    if failures:
-        fallback_from = str(failures[0][0])
-        fallback_reason = _reason(failures[0][1])
-        route_arm = plan.worker
+            failures.append(error)
+    else:
+        raise failures[0]
+    route_arm = plan.worker if route_policy == "compare" else None
     escalation_reason = value.get("escalation_reason")
     if plan.role.allowed_escalation_reasons:
         if escalation_reason is None:
@@ -806,21 +582,8 @@ def _submit(
             "or that the worker will create, belong in read_optional",
             missing_reads=missing_reads,
         )
-    try:
-        adapter = registry.get(plan.adapter)
-    except KeyError as error:
-        raise SubmitRefused(str(error)) from error
-    _preflight(plan, adapter.name)
 
-    root = ledger_root
     root.mkdir(parents=True, exist_ok=True)
-    duplicate = _find_duplicate(
-        root, key, owner_kind, owner_id, fast=plan.fast, route_arm=route_arm
-    )
-    if duplicate is not None:
-        return handle_of(duplicate, deduplicated=True)
-
-    task_id = str(uuid.uuid4())
     task_dir = root / task_id
     task_dir.mkdir(mode=0o700)
     created = events.now_iso()
@@ -839,10 +602,7 @@ def _submit(
         "worker": plan.worker,
         "route_arm": route_arm,
         "route_policy": route_policy,
-        "route_fallback_from": fallback_from,
-        "route_fallback_reason": fallback_reason,
         "unhealthy_override": override,
-        "health_probe": health_probe,
         "adapter": plan.adapter,
         "model": plan.model,
         "effort": plan.effort,
@@ -863,9 +623,9 @@ def _submit(
         "resume_results": [],
         "pid": None,
         "session_id": None,
-        "submitter_session_id": submitter_session_id,
-        "owner_kind": owner_kind,
-        "owner_id": owner_id,
+        "submitter_session_id": caller[1] if caller[0] == "session" else None,
+        "owner_kind": caller[0],
+        "owner_id": caller[1],
         "delivered_to": None,
         "exit_code": None,
         "terminal_reason": None,
@@ -891,9 +651,7 @@ def _submit(
     (task_dir / "prompt.md").write_text(compose_prompt(project_root, plan, value), encoding="utf-8")
     store.write_json(task_dir / "state.json", state)
     state = events.emit(task_dir, "starting")
-    register_completion_watch(
-        project_root, task_id, submitter_session_id, explicit_root(project_root, root)
-    )
+    register_completion_watch(task_dir, state["submitter_session_id"])
 
     try:
         worker_process = subprocess.Popen(

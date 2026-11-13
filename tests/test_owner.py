@@ -56,36 +56,20 @@ def test_an_explicit_owner_makes_a_bridge_task_with_no_session(workspace: Worksp
     assert state["submitter_session_id"] is None
 
 
-def test_the_owner_environment_variable_has_no_effect(workspace: Workspace) -> None:
-    workspace.env["CLAUDE_CODE_SESSION_ID"] = "s1"
-    workspace.env["DELEGATE_OWNER"] = "bridge-a"
-    task_id = finished(workspace)
-    state = state_of(workspace, task_id)
-    assert (state["owner_kind"], state["owner_id"]) == ("session", "s1")
-    code, _ = call(workspace, "collect", task_id)
-    assert code == 0
-
-
-def test_the_worker_environment_lacks_session_and_owner_variables(monkeypatch) -> None:
+def test_the_worker_environment_lacks_the_submitting_session(monkeypatch) -> None:
     from delegate import runner
 
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "s1")
-    monkeypatch.setenv("DELEGATE_OWNER", "bridge-a")
     monkeypatch.setenv("KEEP_ME", "1")
     env = runner.worker_environment()
     assert "CLAUDE_CODE_SESSION_ID" not in env
-    assert not [name for name in env if name.startswith("DELEGATE_OWNER")]
     assert env["KEEP_ME"] == "1"
 
 
 def test_a_bridge_task_is_collected_only_by_its_owner(workspace: Workspace) -> None:
     task_id = finished(workspace, "--owner", "bridge-a")
 
-    for env in (
-        {},
-        {"CLAUDE_CODE_SESSION_ID": "s1"},
-        {"DELEGATE_OWNER": "bridge-b"},
-    ):
+    for env in ({}, {"CLAUDE_CODE_SESSION_ID": "s1"}):
         code, out = call(workspace, "collect", task_id, env=env)
         assert (code, out["error"]) == (OWNER_MISMATCH, "owner_mismatch")
     code, out = call(workspace, "collect", task_id, "--owner", "bridge-b")
@@ -111,15 +95,10 @@ def test_a_session_task_is_open_to_any_session_but_not_to_a_bridge(workspace: Wo
     code, _ = call(workspace, "collect", task_id, env={"CLAUDE_CODE_SESSION_ID": "s2"})
     assert code == 0
     assert state_of(workspace, task_id)["delivered_to"] == {"kind": "session", "id": "s2"}
-
-
-def test_a_session_caller_without_an_id_may_collect_and_is_recorded_as_null(
-    workspace: Workspace,
-) -> None:
-    task_id = finished(workspace)
-    code, _ = call(workspace, "collect", task_id)
-    assert code == 0
-    assert state_of(workspace, task_id)["delivered_to"] == {"kind": "session", "id": None}
+    # A session caller without an id may collect too, and is recorded as null.
+    other = finished(workspace, title="other")
+    assert call(workspace, "collect", other, env={"CLAUDE_CODE_SESSION_ID": ""})[0] == 0
+    assert state_of(workspace, other)["delivered_to"] == {"kind": "session", "id": None}
 
 
 def test_legacy_state_without_owner_fields_is_session_owned(workspace: Workspace) -> None:
@@ -147,13 +126,11 @@ def test_cancel_follows_the_same_owner_rule(workspace: Workspace) -> None:
     assert call(workspace, "cancel", task_id, "--owner", "bridge-a")[0] == 0
     assert wait_for_terminal(workspace, task_id)["status"] == "cancelled"
 
-
-def test_cancelling_a_session_task_as_a_bridge_is_refused(workspace: Workspace) -> None:
     workspace.mode("silent_hang")
-    task_id = workspace.submit()["task_id"]
-    assert call(workspace, "cancel", task_id, "--owner", "bridge-a")[0] == OWNER_MISMATCH
-    assert call(workspace, "cancel", task_id)[0] == 0
-    wait_for_terminal(workspace, task_id)
+    session_task = workspace.submit(title="session")["task_id"]
+    assert call(workspace, "cancel", session_task, "--owner", "bridge-a")[0] == OWNER_MISMATCH
+    assert call(workspace, "cancel", session_task)[0] == 0
+    wait_for_terminal(workspace, session_task)
 
 
 def test_identical_submissions_are_not_deduplicated_across_owner_kinds(

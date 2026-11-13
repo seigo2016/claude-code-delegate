@@ -22,7 +22,7 @@
             "timeout": 3900,
             "async": true,
             "asyncRewake": true,
-            "rewakeMessage": "A delegated task finished. Use the task_id and project_root in the notification (and its task_root, passed as --task-root, when it has one) to collect it exactly once, weigh the evidence, and carry on with what the user asked for.",
+            "rewakeMessage": "A delegated task finished. Use the task_id and task_dir in the notification (pass the parent of task_dir as --task-root) to collect it exactly once, weigh the evidence, and carry on with what the user asked for.",
             "rewakeSummary": "Delegated task finished"
           }
         ]
@@ -38,7 +38,7 @@
             "timeout": 3900,
             "async": true,
             "asyncRewake": true,
-            "rewakeMessage": "A delegated task finished. Use the task_id and project_root in the notification (and its task_root, passed as --task-root, when it has one) to collect it exactly once, weigh the evidence, and carry on with what the user asked for.",
+            "rewakeMessage": "A delegated task finished. Use the task_id and task_dir in the notification (pass the parent of task_dir as --task-root) to collect it exactly once, weigh the evidence, and carry on with what the user asked for.",
             "rewakeSummary": "Delegated task finished"
           }
         ]

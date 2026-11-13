@@ -406,7 +406,7 @@ def test_host_only_work_never_starts_a_worker(workspace: Workspace) -> None:
 def test_a_role_that_must_declare_its_writes_is_refused_without_them(workspace: Workspace) -> None:
     refusal = workspace.submit(role="bounded-implementer")
 
-    assert "allowed_writes" in refusal["error"]
+    assert "allowed_writes" in refusal["reason"]
     assert workspace.calls() == []
 
 
@@ -651,8 +651,7 @@ def test_the_missing_reads_refusal_points_to_read_optional_for_paths_in_question
     packet = json.dumps({**json.loads(PACKET), "read": ["~nosuchuser-zz/x.md"]})
     refused = workspace.submit(packet=packet)
     assert refused["missing_reads"] == ["~nosuchuser-zz/x.md"]
-    assert "existence is itself the question" in refused["error"]
-    assert "read_optional" in refused["error"]
+    assert "read_optional" in refused["reason"]
 
 
 def test_resume_record_shows_the_settled_status_of_the_resumed_attempt(

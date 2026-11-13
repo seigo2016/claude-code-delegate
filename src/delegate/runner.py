@@ -72,12 +72,8 @@ def _snapshot(view: diagnose.RunView) -> dict[str, Any]:
     return snapshot
 
 
-#: A worker that inherited these could act as the session that submitted it.
-_CALLER_IDENTITY = ("CLAUDE_CODE_SESSION_ID", "DELEGATE_OWNER")
-
-
 def worker_environment(task_id: str | None = None) -> dict[str, str]:
-    """This process's environment without anything that names the task's caller.
+    """This process's environment without the session that submitted the task.
 
     ``DELEGATE_WORKER`` marks it as a worker's, so that a delegate started from
     inside one can tell and refuse; ``DELEGATE_PARENT_TASK`` says which task it is.
@@ -85,8 +81,7 @@ def worker_environment(task_id: str | None = None) -> dict[str, str]:
     env = {
         name: value
         for name, value in os.environ.items()
-        if not name.startswith(_CALLER_IDENTITY)
-        and name not in {"DELEGATE_WORKER", "DELEGATE_PARENT_TASK"}
+        if name not in {"CLAUDE_CODE_SESSION_ID", "DELEGATE_WORKER", "DELEGATE_PARENT_TASK"}
     }
     env["DELEGATE_WORKER"] = "1"
     if task_id:

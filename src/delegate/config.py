@@ -37,7 +37,7 @@ class Role:
     allowed_escalation_reasons: tuple[str, ...] = ()
     requires_explicit_user_direction: bool = False
     fast: bool | None = None
-    #: Two or more workers this role alternates between, so they can be compared.
+    #: The two workers this role spreads its tasks over, so they can be compared.
     compare_workers: tuple[str, ...] = ()
 
 
@@ -56,10 +56,6 @@ class Worker:
     levels: dict[str, Level]
     isolate_home: bool = True
     resume_limit: int = 2
-
-
-#: How long a worker that keeps failing for its own reasons is left alone.
-DEFAULT_HEALTH_COOLDOWN_HOURS = 6.0
 
 
 @dataclass(frozen=True)
@@ -87,7 +83,6 @@ class Settings:
     denied_read_paths: tuple[str, ...] = ()
     temp_root: str | None = None
     common_instructions: str | None = None
-    worker_health_cooldown_hours: float = DEFAULT_HEALTH_COOLDOWN_HOURS
 
     def plan(self, role_name: str, *, worker: str | None = None, fast: bool | None = None) -> Plan:
         role = self.roles.get(role_name)
@@ -220,10 +215,8 @@ def _compare_workers(
         isinstance(value, str) and value.strip() for value in values
     ):
         raise ConfigError(f"{key} must be an array of worker names")
-    if len(values) < 2:
-        raise ConfigError(f"{key} needs at least two workers to compare")
-    if len(set(values)) != len(values):
-        raise ConfigError(f"{key} must name distinct workers")
+    if len(values) != 2 or values[0] == values[1]:
+        raise ConfigError(f"{key} must name exactly two distinct workers to compare")
     unknown = [value for value in values if value not in known]
     if unknown:
         raise ConfigError(
@@ -237,13 +230,6 @@ def _compare_workers(
             "(set enabled = true, or leave them out)"
         )
     return tuple(values)
-
-
-def _cooldown_hours(raw: dict[str, Any]) -> float:
-    value = raw.get("worker_health_cooldown_hours", DEFAULT_HEALTH_COOLDOWN_HOURS)
-    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
-        raise ConfigError("worker_health_cooldown_hours must be a non-negative number")
-    return float(value)
 
 
 def _optional_bool(body: dict[str, Any], key: str, where: str, *, default: bool = False) -> bool:
@@ -348,5 +334,4 @@ def parse(data: bytes, path: Path) -> Settings:
         denied_read_paths=_denied_read_paths(raw),
         temp_root=temp_root,
         common_instructions=_common_instructions(raw),
-        worker_health_cooldown_hours=_cooldown_hours(raw),
     )

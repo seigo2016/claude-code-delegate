@@ -79,23 +79,18 @@ role asking for a level the chosen worker does not define is refused before
 anything starts.
 
 To compare two workers on one role, give it `compare_workers = ["codex",
-"claude"]` (two or more distinct names of enabled workers, checked when the
-settings load). Without `--worker`, successive submits take the names in turn:
-the arm is the one asked for least often, the first listed on a tie, counting only
-the role's tasks in the task root with `route_policy = "compare"` (not those
-cancelled before they started, and by the arm asked for, so a fallback counts for
-the arm it replaced). Choosing the arm and recording the task happen under a lock
-on the task root (`.submit.lock`), so concurrent submits alternate. The choice is recorded in `state.json`
-as `route_arm` (the worker name) and `route_policy = "compare"`. It replaces
-`preferred_worker` for that role; `--worker` still wins and records
-`route_policy = "explicit"` with no `route_arm`, so it does not move the
-alternation. Identical in-flight requests are deduplicated only within one arm, and before the
-health check: an identical task that is still running is returned, not refused.
-If the arm the alternation chose cannot run (it cannot be planned, or its binary is
-missing or another submit-time check fails), the submit moves to the next arm
-instead, records `route_fallback_from` and `route_fallback_reason`, and its handle
-carries `route_fallback` (`from`, `to`, `reason`). The submit is refused only when
-no arm can run, with the first arm's error and the others' under `other_arms`.
+"claude"]` (exactly two distinct names of enabled workers, checked when the
+settings load). Without `--worker`, a task takes the arm that a stable hash of its
+new task id picks (the first byte of its SHA-256, modulo 2), so submits spread over
+the two arms without any counting or locking. If that arm cannot be planned or fails
+a submit-time check (a missing binary, say) or is unhealthy (below), the other arm is
+used; the submit is refused only when neither can run, with the first arm's error.
+`state.json` records `route_arm` (the worker that actually runs) and `route_policy`
+(`"compare"`, `"explicit"` for `--worker`, which also wins over the comparison and
+records no `route_arm`, or null). The comparison replaces `preferred_worker` for that
+role. An identical task that is still running is returned instead of started again,
+before the health check, but only on the same arm: the two arms of a comparison are
+two runs.
 
 An optional top-level `[common]` table with `instructions = """..."""` holds text
 that goes into every task's prompt, once, under "Instructions common to all roles"
@@ -236,7 +231,7 @@ something.
 | command | for |
 |---|---|
 | `delegate submit --role R --title T --packet P` | start a worker and get a handle |
-| `delegate collect <task-id> --project-root ROOT` | take delivery, once |
+| `delegate collect <task-id> [--task-root DIR]` | take delivery, once |
 | `delegate status <task-id>` | explicit diagnosis, never a waiting loop |
 | `delegate cancel <task-id>` | stop a task that is wrong or runaway |
 | `delegate reconcile` | classify tasks whose worker is gone |
@@ -248,59 +243,49 @@ command takes `--project-root`.
 A worker is not the Chair. The runner starts every worker with `DELEGATE_WORKER=1`
 and `DELEGATE_PARENT_TASK=<task_id>`, the prompt says it must not delegate whatever
 repository instructions say, and `delegate submit` called with `DELEGATE_WORKER`
-set is refused with `nested_submit` (exit 6). Exit codes: 1 error, 2 `WAKE`, 3
-`already_delivered`, 4 `task_not_terminal`, 5 `owner_mismatch`, 6 `nested_submit`.
+set is refused with `nested_submit` (exit 6).
 
-A worker that is itself broken is not sent more work. At submit, after the worker
-is chosen, the three most recent terminal tasks of that worker in the task root
-(by `terminal_at`) are looked at; when all three ended `failed` with the same
-worker-fault class, submit is refused with `worker_unhealthy` (exit 7) naming the
-worker, the class and the three task ids. The worker-fault classes are
-`auth_failed` (a 401/403, an authentication error or an `api_key` code, as the
-adapters report it; `auth_error` and `api_key_expired` are accepted as the same
-thing), `launch_error` and `supervisor_error` (the latter two matched on
-`terminal_reason`, because their `failure_class` is an exception name). Left out
-because the task or a later retry may be the cause: `worker_api_error`,
-`provider_capacity`, the timeout classes, `nonzero_exit`, `empty_result`,
-`invalid_result`, `incomplete_work` and `write_scope_violation`. Any other outcome
-among the three, or fewer than three tasks, means the worker is not held back.
-`--allow-unhealthy` submits anyway and records `unhealthy_override` in
-`state.json`. The block is a circuit breaker with a cooldown: it lasts until
-`worker_health_cooldown_hours` (top-level setting, default 6) after the last
-failure of the streak. The refusal carries that time as `cooldown_until` and says
-so together with `--allow-unhealthy`. After it, the next submit to the worker goes
-through as a probe and records `health_probe = true` (also in the handle). A
-successful task ends the streak by itself; a probe that fails with a worker-fault
-class again starts a new cooldown. For a role with `compare_workers`, an arm chosen
-by the alternation that is blocked is replaced by another arm that is not
-(`route_arm` is the new one, `route_fallback_from` the skipped one, and the handle
-shows `route_fallback` with the reason); if none can run the submit is refused.
-A worker named with `--worker` is never replaced. Exit codes now also include 7
-`worker_unhealthy`.
+A worker that is itself broken is not sent more work. At submit, the three most
+recent terminal tasks of the chosen worker in the task root (by `terminal_at`) are
+looked at; when all three ended `failed` with the same worker-fault class, submit is
+refused with `worker_unhealthy` (exit 7), naming the worker, the class, the three
+task ids and `--allow-unhealthy`. The worker-fault classes are `auth_failed` (a
+401/403, an authentication error or an `api_key` code, as the adapters report it),
+`launch_error` and `supervisor_error` (matched on `terminal_reason`, because their
+`failure_class` is an exception name). Left out because the task or a later retry
+may be the cause: `worker_api_error`, `provider_capacity`, the timeout classes,
+`nonzero_exit`, `empty_result`, `invalid_result`, `incomplete_work` and
+`write_scope_violation`. Any other outcome among the three, or fewer than three
+tasks, means the worker is not held back, so a success ends the streak by itself.
+`--allow-unhealthy` submits anyway and records `unhealthy_override` in `state.json`.
+For a role with `compare_workers`, a chosen arm that is unhealthy gives way to the
+other arm when that one is not; `--allow-unhealthy` keeps the chosen arm. A worker
+named with `--worker` is never replaced.
+
+Every error prints `{"error": <name>, "reason": <sentence>}` plus any detail, and
+the exit code comes from one table (`delegate/errors.py`): 1 for `no_settings`,
+`invalid_config`, `invalid_packet`, `submit_refused` and `task_not_found`, 2 is
+`WAKE` (not an error), 3 `already_delivered`, 4 `task_not_terminal`, 5
+`owner_mismatch`, 6 `nested_submit`, 7 `worker_unhealthy`.
 
 Settings and task records need not live under the project root. A relative
 `--config` or `--task-root` is taken from the current directory and recorded as an
 absolute path. A task root inside the project is not counted as the worker's
-changes in the write-scope check. `submit --config
-<path>` reads that file instead of `<project-root>/.claude/delegate.toml`, and
-`--task-root <path>` (on `submit`, `status`, `collect`, `cancel`, `reconcile` and
-`watch`) keeps the task records there instead of under
-`<project-root>/.claude/logs/delegate/`. The worker still runs with the project
-root as its working directory. `state.json` records `config_path` (absolute) and
-`config_sha256` (of the bytes that were read) for every task. A handle from a
-non-default root carries `task_root`, which the completion hook, its per-session
-registry and `watch-group.json` pass along; entries without it mean the default
-root, so older ones keep working. Give the same `--task-root` to the later
-commands, since `collect` cannot guess where a task was stored.
-The completion notice, the `reconcile` list and the session-start hook name a task's
-`task_root` in each line when it is not the default and say to pass it with the
-printed `--project-root`; the session-start hook also looks in every task root that
-the session's watch registries point to, not only the project's default one.
- The submit handle and completion notification
-carry the resolved root so cross-repository tasks are collected from the same
-ledger they were submitted to. One Bash call may submit several independent
-tasks: the hook tracks every returned handle. After collecting one, it re-arms
-itself for any still-uncollected task from that same call.
+changes in the write-scope check. `submit --config <path>` reads that file instead
+of `<project-root>/.claude/delegate.toml`, and `--task-root <path>` (on `submit`,
+`status`, `collect`, `cancel`, `reconcile` and `watch`) keeps the task records there
+instead of under `<project-root>/.claude/logs/delegate/`. The worker still runs with
+the project root as its working directory. `state.json` records `config_path`
+(absolute), `config_sha256` (of the bytes that were read) and `task_root` for every
+task. Every handle, completion notice and `reconcile` line carries the task's
+absolute `task_dir`; the hooks, their per-session registry and `watch-group.json`
+record that path alone, so a task is followed wherever it is stored (entries from
+older versions, which name a `project_root` and `task_id`, still mean the default
+root). To collect a task, pass `--task-root` set to the parent of its `task_dir`.
+A watch entry whose directory is missing or unreadable is skipped, not fatal. One
+Bash call may submit several independent tasks: the hook tracks every returned
+handle. After collecting one, it re-arms itself for any still-uncollected task from
+that same call.
 When Claude Code provides `CLAUDE_CODE_SESSION_ID`, submit records it and hooks
 only report that session's tasks. Pending watches are stored per session; legacy
 pending watches migrate when their owner runs the hook. Submissions without the
@@ -318,8 +303,7 @@ session, but not to a bridge owner. `collect` records who took delivery in
 the rest get `already_delivered` (exit 3).
 
 The owner is set only by the `--owner` flag; no environment variable sets it,
-and the worker's environment has `CLAUDE_CODE_SESSION_ID` and owner variables
-removed. The owner check prevents mistakes between a session and a bridge. It is
+and the worker's environment has `CLAUDE_CODE_SESSION_ID` removed. The owner check prevents mistakes between a session and a bridge. It is
 not authentication: the owner id is stored in plain text in the task state.
 
 ## What is and is not checked

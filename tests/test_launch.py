@@ -24,7 +24,7 @@ def test_a_backend_that_does_not_exist_is_refused_before_a_task_is_made(
 
     refusal = workspace.submit()
 
-    assert "does-not-exist" in refusal["error"]
+    assert "does-not-exist" in refusal["reason"]
     assert not (workspace.repo / ".claude" / "logs" / "delegate").exists()
 
 
@@ -35,7 +35,7 @@ def test_a_backend_that_cannot_be_launched_is_refused_before_a_task_is_made(
 
     refusal = workspace.submit()
 
-    assert "codex" in refusal["error"]
+    assert "codex" in refusal["reason"]
     assert not (workspace.repo / ".claude" / "logs" / "delegate").exists()
 
 

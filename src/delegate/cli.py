@@ -8,12 +8,13 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable, Iterable
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-from delegate import config, envelope, events, liveness, runner, store, tasks
+from delegate import config, envelope, errors, events, liveness, runner, store, tasks
 
 WATCH_POLL_SEC = 1.0
 # How long a supervisor may take to claim its lock before we believe it is gone.
@@ -24,9 +25,9 @@ def _print(value: dict[str, Any]) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True))
 
 
-def _fail(message: str, code: int = 1, **detail: Any) -> int:
-    _print({"error": message, **detail})
-    return code
+def _fail(error: str, reason: str | None = None, **detail: Any) -> int:
+    _print({"error": error, "reason": reason or errors.ERRORS[error][1], **detail})
+    return errors.exit_code(error)
 
 
 def _root(value: str | None) -> Path:
@@ -39,53 +40,26 @@ def _ledger(args: argparse.Namespace, project_root: Path) -> Path:
     return Path(value).expanduser().resolve() if value else tasks.task_root(project_root)
 
 
-def _load_task(
-    project_root: Path, task_id: str, ledger: Path | None = None
-) -> tuple[Path, dict[str, Any]]:
-    task_dir = (ledger or tasks.task_root(project_root)) / task_id
+def _load_task(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
+    task_dir = _ledger(args, _root(args.project_root)) / args.task_id
     return task_dir, store.read_json(task_dir / "state.json")
 
 
-#: Exit code for a caller that is not the task's owner. 1 is a parser error, 2 is
-#: ``WAKE``, 3 and 4 are taken by ``collect``.
-OWNER_MISMATCH = 5
-#: Exit code for a submit made from inside a worker.
-NESTED_SUBMIT = 6
-#: Exit code for a submit to a worker that keeps failing for its own reasons.
-WORKER_UNHEALTHY = tasks.WorkerUnhealthy.exit_code
-
-
-def _caller(args: argparse.Namespace) -> dict[str, Any]:
+def _caller(args: argparse.Namespace) -> tasks.Owner:
     """Who is asking: a bridge naming its owner id with ``--owner``, else the session.
 
     Only the flag makes a bridge caller. An inherited environment variable once
-    turned a Claude Code session into one without anyone noticing. The id is
-    stored in plain text: this guards against mistakes, it is not authentication.
+    turned a Claude Code session into one without anyone noticing.
     """
     owner = getattr(args, "owner", None)
     if owner:
-        return {"kind": "bridge", "id": owner}
-    return {"kind": "session", "id": os.environ.get("CLAUDE_CODE_SESSION_ID") or None}
-
-
-def _owner_mismatch(state: dict[str, Any], caller: dict[str, Any]) -> bool:
-    """A bridge task answers only to its owner; a session task, to any session.
-
-    State from before owners existed has no ``owner_kind`` and is a session task.
-    """
-    if state.get("owner_kind", "session") == "bridge":
-        return caller["kind"] != "bridge" or caller["id"] != state.get("owner_id")
-    return caller["kind"] != "session"
+        return ("bridge", owner)
+    return ("session", os.environ.get("CLAUDE_CODE_SESSION_ID") or None)
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
     if os.environ.get("DELEGATE_WORKER"):
-        return _fail(
-            "nested_submit",
-            NESTED_SUBMIT,
-            reason="a delegated worker must not delegate; report back to the Chair instead",
-            parent_task=os.environ.get("DELEGATE_PARENT_TASK"),
-        )
+        return _fail("nested_submit", parent_task=os.environ.get("DELEGATE_PARENT_TASK"))
     project_root = _root(args.project_root)
     config_path = (
         Path(args.config).expanduser().resolve()
@@ -96,15 +70,14 @@ def cmd_submit(args: argparse.Namespace) -> int:
         config_bytes = config_path.read_bytes()
         settings = config.parse(config_bytes, config_path)
     except OSError:
-        return _fail(f"no settings at {config_path}")
+        return _fail("no_settings", f"no settings at {config_path}")
     except config.ConfigError as error:
-        return _fail(str(error))
+        return _fail("invalid_config", str(error))
     try:
         value = json.loads(Path(args.packet).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        return _fail(f"cannot read packet: {error}")
+        return _fail("invalid_packet", f"cannot read packet: {error}")
 
-    caller = _caller(args)
     try:
         handle = tasks.submit(
             project_root=project_root,
@@ -114,58 +87,57 @@ def cmd_submit(args: argparse.Namespace) -> int:
             value=value,
             worker=args.worker,
             fast=args.fast,
-            owner=caller["id"] if caller["kind"] == "bridge" else None,
+            caller=_caller(args),
             config_path=config_path,
             config_sha256=hashlib.sha256(config_bytes).hexdigest(),
             ledger=_ledger(args, project_root),
             allow_unhealthy=args.allow_unhealthy,
         )
     except tasks.SubmitRefused as refused:
-        return _fail(str(refused), refused.exit_code, **refused.detail)
-    except (config.ConfigError, ValueError) as error:
-        return _fail(str(error))
+        return _fail(refused.code, str(refused), **refused.detail)
+    except config.ConfigError as error:
+        return _fail("invalid_config", str(error))
+    except ValueError as error:
+        return _fail("invalid_packet", str(error))
     _print(handle)
     return 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:
     try:
-        project_root = _root(args.project_root)
-        _, state = _load_task(project_root, args.task_id, _ledger(args, project_root))
+        _, state = _load_task(args)
     except (OSError, ValueError, json.JSONDecodeError) as error:
-        return _fail(f"task_not_found: {error}")
+        return _fail("task_not_found", str(error))
     _print(state)
     return 0
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
-    project_root = _root(args.project_root)
     try:
-        task_dir, state = _load_task(project_root, args.task_id, _ledger(args, project_root))
+        task_dir, state = _load_task(args)
     except (OSError, ValueError, json.JSONDecodeError) as error:
-        return _fail(f"task_not_found: {error}")
+        return _fail("task_not_found", str(error))
     caller = _caller(args)
-    if _owner_mismatch(state, caller):
-        return _fail("owner_mismatch", OWNER_MISMATCH)
+    if not tasks.may_act(state, caller):
+        return _fail("owner_mismatch")
     if state["status"] not in events.TERMINAL_STATES:
         return _fail(
             "task_not_terminal",
-            4,
             status=state["status"],
             next_action="end_turn",
             completion_delivery="async_rewake",
         )
-    if state.get("delivered_at"):
-        return _fail("already_delivered", 3, delivered_at=state["delivered_at"])
 
     result: Any = None
     if state["status"] in {"completed", "decision_needed", "unverified"} or (
         state["status"] == "degraded" and state.get("recovery_status") == "usable"
     ):
         result = envelope.chair_display(store.read_json(Path(state["result_path"])))
-    state, claimed = events.claim_delivery(task_dir, delivered_to=caller)
+    state, claimed = events.claim_delivery(
+        task_dir, delivered_to={"kind": caller[0], "id": caller[1]}
+    )
     if not claimed:
-        return _fail("already_delivered", 3, delivered_at=state["delivered_at"])
+        return _fail("already_delivered", delivered_at=state["delivered_at"])
     delivery = {
         "task_id": state["task_id"],
         "status": state["status"],
@@ -192,7 +164,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
             "recovered_result": state.get("recovered_result_path"),
         },
     }
-    remaining = _remaining_watch_tasks(task_dir, state["task_id"])
+    remaining = _remaining_watch_tasks(task_dir)
     if remaining:
         delivery["completion_delivery"] = "async_rewake"
         delivery["watch_tasks"] = remaining
@@ -202,12 +174,11 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
 def cmd_cancel(args: argparse.Namespace) -> int:
     try:
-        project_root = _root(args.project_root)
-        task_dir, state = _load_task(project_root, args.task_id, _ledger(args, project_root))
+        task_dir, state = _load_task(args)
     except (OSError, ValueError, json.JSONDecodeError) as error:
-        return _fail(f"task_not_found: {error}")
-    if _owner_mismatch(state, _caller(args)):
-        return _fail("owner_mismatch", OWNER_MISMATCH)
+        return _fail("task_not_found", str(error))
+    if not tasks.may_act(state, _caller(args)):
+        return _fail("owner_mismatch")
     if state["status"] in events.TERMINAL_STATES:
         _print(state)
         return 0
@@ -219,54 +190,41 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 
 
 def _line(state: dict[str, Any]) -> dict[str, Any]:
-    """One task, short enough to read at a glance in a session start.
-
-    A task kept away from the project's default ledger names it, since the reader
-    needs ``--task-root`` to find the task again.
-    """
-    line = {
+    """One task, short enough to read at a glance in a session start."""
+    return {
         "task_id": state["task_id"],
         "project_root": state["project_root"],
+        "task_dir": state["task_dir"],
         "title": state["title"],
         "role": state["role"],
         "status": state["status"],
         "terminal_reason": state.get("terminal_reason"),
         "collected": bool(state.get("delivered_at")),
     }
-    named = tasks.explicit_root(Path(state["project_root"]), state.get("task_root"))
-    if named is not None:
-        line["task_root"] = str(named)
-    return line
 
 
-COLLECT_NEXT_ACTION = "collect each ready task once"
-TASK_ROOT_NOTE = "; pass --project-root and --task-root as printed for a task that has a task_root"
+COLLECT_NEXT_ACTION = (
+    "collect each ready task once: delegate collect <task_id> --task-root <parent of its task_dir>"
+)
 
 
 def _next_action(lines: list[dict[str, Any]]) -> str | None:
-    if not lines:
-        return None
-    if any("task_root" in line for line in lines):
-        return COLLECT_NEXT_ACTION + TASK_ROOT_NOTE
-    return COLLECT_NEXT_ACTION
+    return COLLECT_NEXT_ACTION if lines else None
 
 
-def _wake_notice(states: list[dict[str, Any]]) -> dict[str, Any]:
-    lines = [_line(state) for state in states]
-    notice: dict[str, Any] = {"ready": lines}
-    if any("task_root" in line for line in lines):
-        notice["next_action"] = _next_action(lines)
-    return notice
-
-
-def _states(ledger: Path) -> list[dict[str, Any]]:
+def _read_states(task_dirs: Iterable[Path]) -> list[dict[str, Any]]:
+    """The states of these tasks; one whose directory is missing or unreadable is skipped."""
     found = []
-    for projection in sorted(ledger.glob("*/state.json")):
+    for task_dir in task_dirs:
         try:
-            found.append(store.read_json(projection))
+            found.append(store.read_json(task_dir / "state.json"))
         except (OSError, ValueError, json.JSONDecodeError):
             continue
     return found
+
+
+def _ledger_dirs(ledger: Path) -> list[Path]:
+    return sorted(path.parent for path in ledger.glob("*/state.json"))
 
 
 def _still_starting(state: dict[str, Any]) -> bool:
@@ -290,43 +248,28 @@ def _reconcile_state(state: dict[str, Any]) -> dict[str, Any]:
     return events.emit(task_dir, "orphaned", terminal_reason="worker_gone")
 
 
-def _session_ledgers(session_id: str, known: Path) -> list[Path]:
-    """The other task roots this session has tasks in, from its watch registries."""
-    found: list[Path] = []
-    for entry in [
-        *tasks.pending_completion_watches(session_id),
-        *_read_session_watches(session_id),
-    ]:
-        named = tasks.explicit_root(Path(entry["project_root"]), entry.get("task_root"))
-        if named is not None and named != known and named not in found:
-            found.append(named)
-    return found
+def _is_ready(state: dict[str, Any]) -> bool:
+    return state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
 
 
 def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> int:
-    project_root = _root(args.project_root)
     # A manual call is a session unless it names an owner, and is shown only what
     # it could collect: offering it another kind's task ends in owner_mismatch.
-    caller = _caller(args)
-    ledgers = [_ledger(args, project_root)]
+    # A hook call is shown the tasks its session submitted, wherever they are kept.
+    task_dirs = _ledger_dirs(_ledger(args, _root(args.project_root)))
     if session_id:
-        ledgers.extend(_session_ledgers(session_id, ledgers[0]))
+        task_dirs += [*tasks.pending_completion_watches(session_id), *_session_watches(session_id)]
+    caller = _caller(args)
+
+    def wanted(state: dict[str, Any]) -> bool:
+        if session_id is None:
+            return tasks.may_act(state, caller)
+        return bool(session_id) and tasks.owner_of(state) == ("session", session_id)
+
     reconciled = [
-        _reconcile_state(state)
-        for ledger in ledgers
-        for state in _states(ledger)
-        if (session_id is None and not _owner_mismatch(state, caller))
-        or (
-            session_id is not None
-            and bool(session_id)
-            and state.get("submitter_session_id") == session_id
-        )
+        _reconcile_state(state) for state in _read_states(dict.fromkeys(task_dirs)) if wanted(state)
     ]
-    ready = [
-        _line(state)
-        for state in reconciled
-        if state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
-    ]
+    ready = [_line(state) for state in reconciled if _is_ready(state)]
     _print(
         {
             "tasks": [_line(state) for state in reconciled],
@@ -352,9 +295,9 @@ WAKE = 2
 QUIET = 0
 
 
-def _handles_from_stdout(stdout: str) -> list[dict[str, Any]]:
-    handles = []
-    seen = set()
+def _task_dirs_from_stdout(stdout: str) -> list[Path]:
+    """The task directories named by the delegate handles in a command's output."""
+    found: dict[Path, None] = {}
     for line in stdout.splitlines():
         try:
             value = json.loads(line)
@@ -362,167 +305,73 @@ def _handles_from_stdout(stdout: str) -> list[dict[str, Any]]:
             continue
         if not isinstance(value, dict) or value.get("completion_delivery") != "async_rewake":
             continue
-        candidates = [value, *value.get("watch_tasks", [])]
-        for candidate in candidates:
-            if not (
-                isinstance(candidate, dict)
-                and isinstance(candidate.get("project_root"), str)
-                and isinstance(candidate.get("task_id"), str)
-            ):
-                continue
-            identity = (
-                candidate["project_root"],
-                candidate["task_id"],
-                candidate.get("task_root"),
-            )
-            if identity not in seen:
-                handles.append(candidate)
-                seen.add(identity)
-    if not handles:
-        raise ValueError("expected at least one delegate handle")
-    return handles
+        for candidate in [value, *value.get("watch_tasks", [])]:
+            task_dir = tasks.entry_dir(candidate)
+            if task_dir is not None:
+                found[task_dir] = None
+    return list(found)
 
 
-def _handles_if_present(stdout: str) -> list[dict[str, Any]]:
-    try:
-        return _handles_from_stdout(stdout)
-    except ValueError:
-        return []
+def _watch_entries(task_dirs: Iterable[Path]) -> list[dict[str, str]]:
+    return [{"task_dir": str(task_dir)} for task_dir in task_dirs]
 
 
-#: A watched task: ``(project_root, task_id)``, plus its task root when that is not
-#: the project's default. The two-item form is what every earlier version wrote.
-Watch = tuple[Any, ...]
+def _watch_group_path(session_id: str, watched: list[Path]) -> Path:
+    digest = hashlib.sha256(json.dumps(_watch_entries(sorted(watched))).encode()).hexdigest()
+    return tasks.watch_registry_dir(session_id) / f"{digest}.json"
 
 
-def _watch_ledger(watch: Watch) -> Path:
-    return watch[2] if len(watch) > 2 else tasks.task_root(watch[0])
-
-
-def _watch_dir(watch: Watch) -> Path:
-    return _watch_ledger(watch) / watch[1]
-
-
-def _watch_entry(watch: Watch) -> dict[str, str]:
-    entry = {"project_root": str(watch[0]), "task_id": watch[1]}
-    if len(watch) > 2:
-        entry["task_root"] = str(watch[2])
-    return entry
-
-
-def _watch_registry_dir(session_id: str) -> Path:
-    root = Path(
-        os.environ.get("DELEGATE_WATCH_ROOT")
-        or Path.home() / ".claude" / "delegate" / "watch-sessions"
-    )
-    digest = hashlib.sha256(session_id.encode()).hexdigest()
-    return root / digest
-
-
-def _watch_group_path(session_id: str, watched: list[Watch]) -> Path:
-    value = [_watch_entry(watch) for watch in sorted(watched)]
-    digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-    return _watch_registry_dir(session_id) / f"{digest}.json"
-
-
-def _read_session_watches(session_id: str) -> list[dict[str, str]]:
+def _session_watch_files(session_id: str) -> list[tuple[Path, list[Path]]]:
+    """Each watch group this session remembered, with the directories it names."""
     found = []
-    for path in _watch_registry_dir(session_id).glob("*.json"):
+    for path in sorted(tasks.watch_registry_dir(session_id).glob("*.json")):
         try:
             value = store.read_json(path)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        if value.get("session_id") != session_id:
-            continue
-        watches = value.get("watch_tasks")
-        if not isinstance(watches, list):
-            continue
-        found.extend(
-            {
-                "project_root": entry["project_root"],
-                "task_id": entry["task_id"],
-                **(
-                    {"task_root": entry["task_root"]}
-                    if isinstance(entry.get("task_root"), str)
-                    else {}
-                ),
-            }
-            for entry in watches
-            if isinstance(entry, dict)
-            and isinstance(entry.get("project_root"), str)
-            and isinstance(entry.get("task_id"), str)
-        )
-    return found
-
-
-def _remember_session_watch_group(session_id: str, watched: list[Watch]) -> None:
-    if not watched:
-        return
-    store.write_json(
-        _watch_group_path(session_id, watched),
-        {"session_id": session_id, "watch_tasks": [_watch_entry(watch) for watch in watched]},
-    )
-
-
-def _prune_session_watches(session_id: str) -> None:
-    for path in _watch_registry_dir(session_id).glob("*.json"):
-        try:
-            value = store.read_json(path)
-            if value.get("session_id") != session_id:
-                continue
-            watches = _watch_tasks_from_handles(value["watch_tasks"])
+            entries = value["watch_tasks"]
         except (KeyError, OSError, ValueError, json.JSONDecodeError):
             path.unlink(missing_ok=True)
             continue
-        pending = _pending_session_watches(watches)
+        if value.get("session_id") == session_id and isinstance(entries, list):
+            found.append((path, [d for d in map(tasks.entry_dir, entries) if d is not None]))
+    return found
+
+
+def _session_watches(session_id: str) -> list[Path]:
+    return [task_dir for _, task_dirs in _session_watch_files(session_id) for task_dir in task_dirs]
+
+
+def _prune_session_watches(session_id: str) -> None:
+    for path, task_dirs in _session_watch_files(session_id):
+        pending = _pending_session_watches(task_dirs)
         if pending:
             store.write_json(
-                path,
-                {"session_id": session_id, "watch_tasks": [_watch_entry(w) for w in pending]},
+                path, {"session_id": session_id, "watch_tasks": _watch_entries(pending)}
             )
         else:
             path.unlink(missing_ok=True)
 
 
-def _watch_tasks_from_handles(
-    handles: list[dict[str, Any]], session_id: str | None = None
-) -> list[Watch]:
-    watched: list[Watch] = []
-    seen = set()
-    for handle in handles:
-        project_root = _root(handle["project_root"])
-        named = handle.get("task_root")
-        ledger = tasks.explicit_root(project_root, named if isinstance(named, str) else None)
-        _, state = _load_task(project_root, handle["task_id"], ledger)
-        if (
-            state.get("project_root") != str(project_root)
-            or state.get("task_id") != handle["task_id"]
-        ):
-            raise ValueError("task handle does not match task state")
-        owner = state.get("submitter_session_id")
-        if session_id is not None and (not session_id or owner != session_id):
-            continue
-        identity: Watch = (project_root, state["task_id"])
-        if ledger is not None:
-            identity = (project_root, state["task_id"], ledger)
-        if identity not in seen:
-            watched.append(identity)
-            seen.add(identity)
-    return watched
+def _owned_by_session(task_dirs: Iterable[Path], session_id: str) -> list[Path]:
+    """These task directories, deduplicated, when they hold a task this session submitted."""
+    owned: dict[Path, None] = {}
+    for task_dir in task_dirs:
+        for state in _read_states([task_dir]):
+            if state.get("task_id") == task_dir.name and tasks.owner_of(state) == (
+                "session",
+                session_id,
+            ):
+                owned[task_dir] = None
+    return list(owned)
 
 
-def _pending_session_watches(watched: list[Watch]) -> list[Watch]:
+def _pending_session_watches(task_dirs: list[Path]) -> list[Path]:
+    """The watched tasks still running or waiting to be collected."""
     pending = []
-    for watch in watched:
-        try:
-            state = store.read_json(_watch_dir(watch) / "state.json")
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        state = _reconcile_state(state)
-        if state["status"] in events.ACTIVE_STATES or (
-            state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
-        ):
-            pending.append(watch)
+    for task_dir in task_dirs:
+        for state in _read_states([task_dir]):
+            state = _reconcile_state(state)
+            if state["status"] in events.ACTIVE_STATES or _is_ready(state):
+                pending.append(task_dir)
     return pending
 
 
@@ -553,21 +402,14 @@ def cmd_hook_watch(args: argparse.Namespace) -> int:
             if event_name == "PostToolUse"
             else hook_input["error"]
         )
-        handles = _handles_if_present(output)
-        registered = tasks.pending_completion_watches(session_id)
-        submitted = (
-            _watch_tasks_from_handles([*handles, *registered], session_id)
-            if (handles or registered)
-            else []
-        )
-        watched = _watch_tasks_from_handles(
-            [*_read_session_watches(session_id), *handles, *registered], session_id
-        )
+        handles = _task_dirs_from_stdout(output)
     except (KeyError, TypeError, OSError, ValueError, json.JSONDecodeError):
         _print({"ready": []})
         return QUIET
-    _remember_watch_group(submitted)
-    _remember_session_watch_group(session_id, submitted)
+    registered = tasks.pending_completion_watches(session_id)
+    submitted = _owned_by_session([*handles, *registered], session_id)
+    watched = _owned_by_session([*_session_watches(session_id), *submitted], session_id)
+    _remember_watch_group(session_id, submitted)
     tasks.clear_pending_completion_watches(session_id, registered)
     result = _watch_tasks(watched)
     if result == WAKE:
@@ -575,117 +417,72 @@ def cmd_hook_watch(args: argparse.Namespace) -> int:
     return result
 
 
-def _remember_watch_group(watched: list[Watch]) -> None:
-    group = {"watch_tasks": [_watch_entry(watch) for watch in watched]}
-    for watch in watched:
-        store.write_json(_watch_dir(watch) / "watch-group.json", group)
+def _remember_watch_group(session_id: str, watched: list[Path]) -> None:
+    """Record which tasks were submitted together, in each task and in the session."""
+    if not watched:
+        return
+    group = {"watch_tasks": _watch_entries(watched)}
+    for task_dir in watched:
+        store.write_json(task_dir / "watch-group.json", group)
+    store.write_json(_watch_group_path(session_id, watched), {"session_id": session_id, **group})
 
 
-def _remaining_watch_tasks(task_dir: Path, collected_task_id: str) -> list[dict[str, str]]:
+def _remaining_watch_tasks(task_dir: Path) -> list[dict[str, str]]:
+    """The other tasks watched together with this one that have not been collected."""
     try:
         group = store.read_json(task_dir / "watch-group.json")["watch_tasks"]
     except (KeyError, OSError, ValueError, json.JSONDecodeError):
         return []
-    remaining = []
-    for entry in group:
-        if not isinstance(entry, dict):
-            continue
-        project_root = entry.get("project_root")
-        task_id = entry.get("task_id")
-        named = entry.get("task_root")
-        if (
-            not isinstance(project_root, str)
-            or not isinstance(task_id, str)
-            or task_id == collected_task_id
-        ):
-            continue
-        root = _root(project_root)
-        ledger = tasks.explicit_root(root, named if isinstance(named, str) else None)
-        try:
-            _, state = _load_task(root, task_id, ledger)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        if not state.get("delivered_at"):
-            item = {"project_root": project_root, "task_id": task_id}
-            if ledger is not None:
-                item["task_root"] = str(ledger)
-            remaining.append(item)
-    return remaining
+    return [
+        {"task_id": state["task_id"], "task_dir": str(other)}
+        for other in map(tasks.entry_dir, group)
+        if other is not None and other != task_dir
+        for state in _read_states([other])
+        if not state.get("delivered_at")
+    ]
 
 
-def _watch(ledger: Path, caller: dict[str, Any]) -> int:
+def _watch(ledger: Path, caller: tasks.Owner) -> int:
     # One watcher per caller, so a bridge's watch does not silence a session's.
     name = "watch.lock"
-    if caller["kind"] == "bridge":
-        name = f"watch-{hashlib.sha256(str(caller['id']).encode()).hexdigest()[:16]}.lock"
+    if caller[0] == "bridge":
+        name = f"watch-{hashlib.sha256(str(caller[1]).encode()).hexdigest()[:16]}.lock"
     try:
         with liveness.hold(ledger / name):
-            return _wait_for_something_to_collect(ledger, caller)
+            return _wait(lambda: _ledger_states(ledger, caller))
     except liveness.AlreadyHeld:
         # Deduplicated submissions can return the same active task handle.
         _print({"ready": []})
         return QUIET
 
 
-def _watch_tasks(watched: list[Watch]) -> int:
+def _ledger_states(ledger: Path, caller: tasks.Owner) -> list[dict[str, Any]]:
+    return [state for state in _read_states(_ledger_dirs(ledger)) if tasks.may_act(state, caller)]
+
+
+def _watch_tasks(watched: list[Path]) -> int:
     with ExitStack() as locks:
         accepted = []
-        for watch in watched:
+        for task_dir in watched:
             try:
-                locks.enter_context(liveness.hold(_watch_dir(watch) / "watch.lock"))
-            except liveness.AlreadyHeld:
+                locks.enter_context(liveness.hold(task_dir / "watch.lock"))
+            except (liveness.AlreadyHeld, OSError):
                 continue
-            accepted.append(watch)
+            accepted.append(task_dir)
         if not accepted:
             _print({"ready": []})
             return QUIET
-        return _wait_for_tasks(accepted)
+        return _wait(lambda: _read_states(accepted))
 
 
-def _wait_for_tasks(watched: list[Watch]) -> int:
-    limit = float(os.environ.get("DELEGATE_WATCH_SEC", "3600"))
-    deadline = time.monotonic() + limit
+def _wait(read: Callable[[], list[dict[str, Any]]]) -> int:
+    """Poll until a task is ready to collect (``WAKE``) or none is left running (``QUIET``)."""
+    deadline = time.monotonic() + float(os.environ.get("DELEGATE_WATCH_SEC", "3600"))
     while True:
-        states = []
-        for watch in watched:
-            try:
-                state = store.read_json(_watch_dir(watch) / "state.json")
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
-            states.append(_reconcile_state(state))
-        ready = [
-            state
-            for state in states
-            if state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
-        ]
+        states = [_reconcile_state(state) for state in read()]
+        ready = [state for state in states if _is_ready(state)]
         if ready:
-            _print(_wake_notice(ready))
-            return WAKE
-        if (
-            not any(state["status"] in events.ACTIVE_STATES for state in states)
-            or time.monotonic() >= deadline
-        ):
-            _print({"ready": []})
-            return QUIET
-        time.sleep(WATCH_POLL_SEC)
-
-
-def _wait_for_something_to_collect(ledger: Path, caller: dict[str, Any]) -> int:
-    limit = float(os.environ.get("DELEGATE_WATCH_SEC", "3600"))
-    deadline = time.monotonic() + limit
-    while True:
-        states = [
-            _reconcile_state(state)
-            for state in _states(ledger)
-            if not _owner_mismatch(state, caller)
-        ]
-        ready = [
-            state
-            for state in states
-            if state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
-        ]
-        if ready:
-            _print(_wake_notice(ready))
+            _print({"ready": [_line(state) for state in ready], "next_action": COLLECT_NEXT_ACTION})
             return WAKE
         waiting = any(state["status"] in events.ACTIVE_STATES for state in states)
         if not waiting or time.monotonic() >= deadline:
