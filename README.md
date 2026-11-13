@@ -229,7 +229,9 @@ When Claude Code provides `CLAUDE_CODE_SESSION_ID`, submit records it and hooks
 only report that session's tasks. Pending watches are stored per session; legacy
 pending watches migrate when their owner runs the hook. Submissions without the
 ID do not wake a session. Manual `watch`, `reconcile`, and `collect`
-remain project-wide diagnostic commands.
+remain project-wide diagnostic commands; called as a session they leave bridge-owned
+tasks out, and with `--owner <id>` (`watch`, `reconcile`) they show only that
+owner's bridge tasks.
 
 `submit --owner <id>` makes a bridge-owned task instead:
 `owner_kind` is `bridge`, no session is recorded, and no hook announces it.

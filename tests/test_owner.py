@@ -12,8 +12,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from conftest import Workspace
 from delegate import store
 from test_lifecycle import wait_for_terminal
@@ -204,3 +202,44 @@ def test_bridge_tasks_are_never_announced_to_a_session(
     assert reconciled.returncode == 0
     assert json.loads(reconciled.stdout)["tasks"] == []
     assert json.loads(reconciled.stdout)["ready"] == []
+
+
+def test_manual_reconcile_offers_a_session_only_session_tasks(workspace: Workspace) -> None:
+    session_id = finished(workspace, title="mine")
+    bridge_id = finished(workspace, "--owner", "bridge-a", title="theirs")
+
+    reconciled = workspace.run("reconcile")
+
+    assert [line["task_id"] for line in reconciled["ready"]] == [session_id]
+    assert bridge_id not in {line["task_id"] for line in reconciled["tasks"]}
+
+
+def test_manual_reconcile_with_an_owner_shows_only_that_owners_tasks(
+    workspace: Workspace,
+) -> None:
+    finished(workspace, title="mine")
+    mine = finished(workspace, "--owner", "bridge-a", title="theirs")
+    finished(workspace, "--owner", "bridge-b", title="other")
+
+    reconciled = workspace.run("reconcile", "--owner", "bridge-a")
+
+    assert [line["task_id"] for line in reconciled["ready"]] == [mine]
+    assert [line["task_id"] for line in reconciled["tasks"]] == [mine]
+
+
+def test_manual_watch_is_not_woken_by_the_other_kind(workspace: Workspace) -> None:
+    bridge_id = finished(workspace, "--owner", "bridge-a", title="theirs")
+    env = {"DELEGATE_WATCH_SEC": "1"}
+
+    code, out = call(workspace, "watch", env=env)
+    assert (code, out["ready"]) == (QUIET, [])
+
+    code, out = call(workspace, "watch", "--owner", "bridge-a", env=env)
+    assert code == 2
+    assert [line["task_id"] for line in out["ready"]] == [bridge_id]
+
+    session_id = finished(workspace, title="mine")
+    code, out = call(workspace, "watch", "--owner", "bridge-a", env=env)
+    assert [line["task_id"] for line in out["ready"]] == [bridge_id]
+    code, out = call(workspace, "watch", env=env)
+    assert [line["task_id"] for line in out["ready"]] == [session_id]

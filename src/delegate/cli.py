@@ -231,11 +231,18 @@ def _reconcile_state(state: dict[str, Any]) -> dict[str, Any]:
 
 def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> int:
     project_root = _root(args.project_root)
+    # A manual call is a session unless it names an owner, and is shown only what
+    # it could collect: offering it another kind's task ends in owner_mismatch.
+    caller = _caller(args)
     reconciled = [
         _reconcile_state(state)
         for state in _states(project_root)
-        if session_id is None
-        or (bool(session_id) and state.get("submitter_session_id") == session_id)
+        if (session_id is None and not _owner_mismatch(state, caller))
+        or (
+            session_id is not None
+            and bool(session_id)
+            and state.get("submitter_session_id") == session_id
+        )
     ]
     ready = [
         _line(state)
@@ -426,7 +433,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     Exit ``WAKE`` means there is a finished, uncollected task. Exit ``QUIET`` means
     the session should be left alone.
     """
-    return _watch(_root(args.project_root))
+    return _watch(_root(args.project_root), _caller(args))
 
 
 def cmd_hook_watch(args: argparse.Namespace) -> int:
@@ -506,10 +513,14 @@ def _remaining_watch_tasks(task_dir: Path, collected_task_id: str) -> list[dict[
     return remaining
 
 
-def _watch(project_root: Path) -> int:
+def _watch(project_root: Path, caller: dict[str, Any]) -> int:
+    # One watcher per caller, so a bridge's watch does not silence a session's.
+    name = "watch.lock"
+    if caller["kind"] == "bridge":
+        name = f"watch-{hashlib.sha256(str(caller['id']).encode()).hexdigest()[:16]}.lock"
     try:
-        with liveness.hold(tasks.task_root(project_root) / "watch.lock"):
-            return _wait_for_something_to_collect(project_root)
+        with liveness.hold(tasks.task_root(project_root) / name):
+            return _wait_for_something_to_collect(project_root, caller)
     except liveness.AlreadyHeld:
         # Deduplicated submissions can return the same active task handle.
         _print({"ready": []})
@@ -568,11 +579,15 @@ def _wait_for_tasks(watched: list[tuple[Path, str]]) -> int:
         time.sleep(WATCH_POLL_SEC)
 
 
-def _wait_for_something_to_collect(project_root: Path) -> int:
+def _wait_for_something_to_collect(project_root: Path, caller: dict[str, Any]) -> int:
     limit = float(os.environ.get("DELEGATE_WATCH_SEC", "3600"))
     deadline = time.monotonic() + limit
     while True:
-        states = [_reconcile_state(state) for state in _states(project_root)]
+        states = [
+            _reconcile_state(state)
+            for state in _states(project_root)
+            if not _owner_mismatch(state, caller)
+        ]
         ready = [
             state
             for state in states
@@ -638,12 +653,18 @@ def build_parser() -> argparse.ArgumentParser:
     cancel.set_defaults(func=cmd_cancel)
 
     reconcile = with_root(sub.add_parser("reconcile", help="classify tasks whose worker is gone"))
+    reconcile.add_argument(
+        "--owner", default=None, help="list only this bridge owner's tasks (default: session tasks)"
+    )
     reconcile.set_defaults(func=cmd_reconcile)
 
     hook_reconcile = with_root(sub.add_parser("_hook-reconcile", help=argparse.SUPPRESS))
     hook_reconcile.set_defaults(func=cmd_hook_reconcile)
 
     watch = with_root(sub.add_parser("watch", help="wait until a task is worth collecting"))
+    watch.add_argument(
+        "--owner", default=None, help="wait for this bridge owner's tasks (default: session tasks)"
+    )
     watch.set_defaults(func=cmd_watch)
 
     hook_watch = sub.add_parser("_hook-watch", help=argparse.SUPPRESS)

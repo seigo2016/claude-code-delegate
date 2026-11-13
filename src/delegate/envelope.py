@@ -34,8 +34,8 @@ def normalize_blocker(item: Any, forbidden: Sequence[str] | None = None) -> Any:
     A worker declares its own reason, so ``forbidden_by_packet`` is believed only
     when ``forbidden_item`` is exactly one of the packet's ``forbidden`` entries;
     otherwise the blocker is ``not_done``. The field is optional; because a strict
-    output schema must list every property, ``null`` is accepted and dropped. ``forbidden=None`` skips that check, for
-    a result that was already normalised against its packet.
+    output schema must list every property, ``null`` is accepted and dropped.
+    ``forbidden=None`` skips that check, for a result already normalised against its packet.
 
     Anything that is not a string or an object with a string ``text`` is returned
     unchanged so that ``violations`` reports it.
@@ -92,9 +92,7 @@ def settle(result: dict[str, Any], *, writes_allowed: bool) -> dict[str, Any]:
     return result
 
 
-def sanitize(
-    result: Any, *, writes_allowed: bool = False, forbidden: Sequence[str] = ()
-) -> Any:
+def sanitize(result: Any, *, writes_allowed: bool = False, forbidden: Sequence[str] = ()) -> Any:
     """Coerce a near-valid envelope into shape where possible.
 
     Workers (especially external models) often produce envelopes that are

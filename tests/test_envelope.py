@@ -312,7 +312,9 @@ def test_forbidden_by_packet_with_a_listed_item_is_kept() -> None:
     "item", ["not listed", "Editing config", 5, None, ["editing config"], "editing config "]
 )
 def test_forbidden_by_packet_with_another_item_becomes_not_done(item: object) -> None:
-    cleaned = envelope.sanitize({**valid(), "blockers": [forbidden_blocker(item)]}, forbidden=FORBIDDEN)
+    cleaned = envelope.sanitize(
+        {**valid(), "blockers": [forbidden_blocker(item)]}, forbidden=FORBIDDEN
+    )
     assert cleaned["blockers"] == [blocker("not_done", "t")]
 
 

@@ -80,9 +80,7 @@ _CALLER_IDENTITY = ("CLAUDE_CODE_SESSION_ID", "DELEGATE_OWNER")
 def worker_environment() -> dict[str, str]:
     """This process's environment without anything that names the task's caller."""
     return {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith(_CALLER_IDENTITY)
+        name: value for name, value in os.environ.items() if not name.startswith(_CALLER_IDENTITY)
     }
 
 
@@ -612,8 +610,8 @@ def _finish(
     )
     # An environment failure that turned completed into unverified is the cause
     # a reader needs to see, and no resume could fix it.
-    blocked = declared_complete and terminal == "unverified" and envelope.has_environment_blocker(
-        result
+    blocked = (
+        declared_complete and terminal == "unverified" and envelope.has_environment_blocker(result)
     )
     events.emit(
         task_dir,

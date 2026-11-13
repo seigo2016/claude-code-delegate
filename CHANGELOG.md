@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Manual `reconcile` and `watch` no longer offer bridge-owned tasks to a session caller; `--owner <id>` shows only that owner's bridge tasks.
 - Make `collect` deliver exactly once: the delivered check and its record now share one lock hold.
 - Add owner kinds: `submit --owner` makes a bridge-owned task that only the same owner may `collect` or `cancel` (`owner_mismatch`, exit 5) and that hooks never announce. `collect` records `delivered_to`. The owner comes only from `--owner` (no environment variable), and workers no longer inherit `CLAUDE_CODE_SESSION_ID` or owner variables; the check guards against mistakes, not against a hostile caller.
 - Give each blocker a reason (`forbidden_by_packet`, `environment`, `not_done`); legacy string blockers read as `not_done`. A `completed` result with a `not_done` blocker ends `unverified` (read-only) or is resumed then `failed` / `incomplete_work` (write-capable). `forbidden_by_packet` counts only with a `forbidden_item` that exactly matches an entry of the packet's `forbidden` list (else `not_done`); an `environment` blocker on `completed` ends `unverified` (`environment_blocked`) for every role, without a resume.

@@ -629,9 +629,7 @@ def test_write_task_treats_an_unmatched_forbidden_by_packet_as_not_done(
     handle = workspace.submit(packet=forbidden_packet(write_packet()), role="bounded-implementer")
     state = wait_for_terminal(workspace, handle["task_id"])
     assert state["failure_class"] == "incomplete_work"
-    assert state["resume_results"][0]["result"]["blockers"] == [
-        not_done("check prohibited")
-    ]
+    assert state["resume_results"][0]["result"]["blockers"] == [not_done("check prohibited")]
 
 
 def test_write_task_with_an_environment_blocker_ends_unverified_without_resuming(
@@ -705,7 +703,6 @@ def test_a_malformed_blocker_ends_invalid_result_not_supervisor_error(
     state = wait_for_terminal(workspace, handle["task_id"])
     assert state["terminal_reason"] == "invalid_result"
     assert state["result_problems"]
-
 
 
 def test_the_missing_reads_refusal_points_to_read_optional_for_paths_in_question(
