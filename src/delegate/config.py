@@ -58,6 +58,10 @@ class Worker:
     resume_limit: int = 2
 
 
+#: How long a worker that keeps failing for its own reasons is left alone.
+DEFAULT_HEALTH_COOLDOWN_HOURS = 6.0
+
+
 @dataclass(frozen=True)
 class Plan:
     """Everything needed to start one task, decided up front."""
@@ -83,6 +87,7 @@ class Settings:
     denied_read_paths: tuple[str, ...] = ()
     temp_root: str | None = None
     common_instructions: str | None = None
+    worker_health_cooldown_hours: float = DEFAULT_HEALTH_COOLDOWN_HOURS
 
     def plan(self, role_name: str, *, worker: str | None = None, fast: bool | None = None) -> Plan:
         role = self.roles.get(role_name)
@@ -234,6 +239,13 @@ def _compare_workers(
     return tuple(values)
 
 
+def _cooldown_hours(raw: dict[str, Any]) -> float:
+    value = raw.get("worker_health_cooldown_hours", DEFAULT_HEALTH_COOLDOWN_HOURS)
+    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+        raise ConfigError("worker_health_cooldown_hours must be a non-negative number")
+    return float(value)
+
+
 def _optional_bool(body: dict[str, Any], key: str, where: str, *, default: bool = False) -> bool:
     value = body.get(key, default)
     if not isinstance(value, bool):
@@ -336,4 +348,5 @@ def parse(data: bytes, path: Path) -> Settings:
         denied_read_paths=_denied_read_paths(raw),
         temp_root=temp_root,
         common_instructions=_common_instructions(raw),
+        worker_health_cooldown_hours=_cooldown_hours(raw),
     )

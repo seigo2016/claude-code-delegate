@@ -13,7 +13,8 @@ import shutil
 import subprocess
 import sys
 import uuid
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -97,11 +98,26 @@ def _terminal_key(state: dict[str, Any]) -> tuple[datetime, str]:
     return (datetime.fromisoformat(str(state["terminal_at"])), str(state.get("task_id")))
 
 
-def recent_unhealthy(root: Path, worker: str) -> tuple[str, list[str]] | None:
-    """``(class, task ids)`` when the worker's last three terminal tasks all failed alike.
+@dataclass(frozen=True)
+class Health:
+    """A worker's unhealthy streak and when it may be tried again."""
+
+    failure_class: str
+    task_ids: list[str]
+    last_failure_at: datetime
+    until: datetime
+
+    def probing(self, now: datetime) -> bool:
+        """True once the cooldown is over: the next submit is a probe, not a retry."""
+        return now >= self.until
+
+
+def health_of(root: Path, worker: str, cooldown_hours: float) -> Health | None:
+    """The worker's unhealthy streak, when its last three terminal tasks all failed alike.
 
     Newest first. A task of another outcome in between, or fewer than three tasks,
-    means the worker is not known to be broken.
+    means the worker is not known to be broken. The cooldown runs from the last
+    failure of the streak, so a probe that fails again opens a new one.
     """
     if not root.exists():
         return None
@@ -114,13 +130,25 @@ def recent_unhealthy(root: Path, worker: str) -> tuple[str, list[str]] | None:
         except (KeyError, ValueError):
             continue
     finished.sort(key=lambda item: item[0], reverse=True)
-    latest = [state for _, state in finished[:UNHEALTHY_STREAK]]
+    latest = [(key, state) for key, state in finished[:UNHEALTHY_STREAK]]
     if len(latest) < UNHEALTHY_STREAK:
         return None
-    classes = {worker_fault(state) for state in latest}
+    classes = {worker_fault(state) for _, state in latest}
     if len(classes) != 1 or None in classes:
         return None
-    return str(classes.pop()), [str(state["task_id"]) for state in latest]
+    last = latest[0][0][0]
+    return Health(
+        failure_class=str(classes.pop()),
+        task_ids=[str(state["task_id"]) for _, state in latest],
+        last_failure_at=last,
+        until=last + timedelta(hours=cooldown_hours),
+    )
+
+
+def recent_unhealthy(root: Path, worker: str) -> tuple[str, list[str]] | None:
+    """``(class, task ids)`` of the worker's unhealthy streak, ignoring any cooldown."""
+    health = health_of(root, worker, 0)
+    return None if health is None else (health.failure_class, health.task_ids)
 
 
 def settings_path(project_root: Path) -> Path:
@@ -394,6 +422,8 @@ def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str,
     root = explicit_root(Path(state["project_root"]), state.get("task_root"))
     if root is not None:
         handle["task_root"] = str(root)
+    if state.get("health_probe"):
+        handle["health_probe"] = True
     # A comparison that could not use the arm it chose says so where the caller looks.
     if state.get("route_fallback_from"):
         handle["route_fallback"] = {
@@ -517,6 +547,13 @@ def _candidates(
     return [arms[(start + step) % len(arms)] for step in range(len(arms))]
 
 
+@dataclass(frozen=True)
+class _Arm:
+    plan: config.Plan
+    override: dict[str, Any] | None
+    probe: bool
+
+
 def _try_worker(
     settings: config.Settings,
     role: str,
@@ -526,22 +563,29 @@ def _try_worker(
     *,
     allow_unhealthy: bool,
     preflight: bool,
-) -> tuple[config.Plan, dict[str, Any] | None]:
-    """The plan for one worker and any health override, or why it cannot run."""
+) -> _Arm:
+    """The plan for one worker, how its health was waived if it was, or why it cannot run."""
     plan = settings.plan(role, worker=worker, fast=fast)
     override: dict[str, Any] | None = None
-    unhealthy = recent_unhealthy(ledger_root, plan.worker)
-    if unhealthy is not None and allow_unhealthy:
-        override = {"failure_class": unhealthy[0], "task_ids": unhealthy[1]}
-    elif unhealthy is not None:
+    probe = False
+    health = health_of(ledger_root, plan.worker, settings.worker_health_cooldown_hours)
+    if health is not None and allow_unhealthy:
+        override = {"failure_class": health.failure_class, "task_ids": health.task_ids}
+    elif health is not None and health.probing(datetime.now().astimezone()):
+        probe = True
+    elif health is not None:
+        until = health.until.isoformat(timespec="seconds")
         raise WorkerUnhealthy(
             "worker_unhealthy",
             worker=plan.worker,
-            failure_class=unhealthy[0],
-            task_ids=unhealthy[1],
+            failure_class=health.failure_class,
+            task_ids=health.task_ids,
+            cooldown_until=until,
             reason=(
                 f"the last {UNHEALTHY_STREAK} tasks of {plan.worker} all failed with "
-                f"{unhealthy[0]}; fix the worker, or pass --allow-unhealthy to retry"
+                f"{health.failure_class}; it is not tried again until {until} (cooldown "
+                f"{settings.worker_health_cooldown_hours:g} h after the last failure) - "
+                "wait for that, fix the worker, or pass --allow-unhealthy to retry now"
             ),
         )
     if preflight:
@@ -550,7 +594,7 @@ def _try_worker(
         except KeyError as error:
             raise SubmitRefused(str(error)) from error
         _preflight(plan, adapter.name)
-    return plan, override
+    return _Arm(plan, override, probe)
 
 
 def _reason(error: Exception) -> str:
@@ -583,13 +627,12 @@ def submit(
     chosen, route_arm, route_policy = _route(settings, role, worker, ledger_root)
     candidates = _candidates(settings, role, chosen, route_policy)
     failures: list[tuple[str | None, Exception]] = []
-    plan: config.Plan | None = None
-    override: dict[str, Any] | None = None
+    arm: _Arm | None = None
     for candidate in candidates:
         try:
             # With several arms to choose from, an arm that could not be started
             # is skipped; with one, the checks below say what is wrong as before.
-            plan, override = _try_worker(
+            arm = _try_worker(
                 settings,
                 role,
                 candidate,
@@ -602,13 +645,14 @@ def submit(
             failures.append((candidate, error))
             continue
         break
-    if plan is None:
+    if arm is None:
         first = failures[0][1]
         if isinstance(first, SubmitRefused) and len(failures) > 1:
             first.detail["other_arms"] = [
                 {"worker": name, "reason": _reason(error)} for name, error in failures[1:]
             ]
         raise first
+    plan, override, health_probe = arm.plan, arm.override, arm.probe
     fallback_from: str | None = None
     fallback_reason: str | None = None
     if failures:
@@ -704,6 +748,7 @@ def submit(
         "route_fallback_from": fallback_from,
         "route_fallback_reason": fallback_reason,
         "unhealthy_override": override,
+        "health_probe": health_probe,
         "adapter": plan.adapter,
         "model": plan.model,
         "effort": plan.effort,

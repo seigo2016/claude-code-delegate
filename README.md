@@ -261,9 +261,16 @@ because the task or a later retry may be the cause: `worker_api_error`,
 `invalid_result`, `incomplete_work` and `write_scope_violation`. Any other outcome
 among the three, or fewer than three tasks, means the worker is not held back.
 `--allow-unhealthy` submits anyway and records `unhealthy_override` in
-`state.json`. For a role with `compare_workers`, an arm chosen by the alternation
-that is unhealthy is replaced by a healthy other arm (`route_arm` is the new one,
-`route_fallback_from` the skipped one); if none is healthy the submit is refused.
+`state.json`. The block is a circuit breaker with a cooldown: it lasts until
+`worker_health_cooldown_hours` (top-level setting, default 6) after the last
+failure of the streak. The refusal carries that time as `cooldown_until` and says
+so together with `--allow-unhealthy`. After it, the next submit to the worker goes
+through as a probe and records `health_probe = true` (also in the handle). A
+successful task ends the streak by itself; a probe that fails with a worker-fault
+class again starts a new cooldown. For a role with `compare_workers`, an arm chosen
+by the alternation that is blocked is replaced by another arm that is not
+(`route_arm` is the new one, `route_fallback_from` the skipped one, and the handle
+shows `route_fallback` with the reason); if none can run the submit is refused.
 A worker named with `--worker` is never replaced. Exit codes now also include 7
 `worker_unhealthy`.
 
