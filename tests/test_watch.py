@@ -169,7 +169,7 @@ def test_pending_submissions_are_delivered_only_to_their_sessions(
         cwd=tmp_path,
     )
     assert start.returncode == 0
-    assert {item["task_id"] for item in json.loads(start.stdout)["tasks"]} == {second["task_id"]}
+    assert start.stdout == ""
     result = hook_watch(workspace, "filtered", cwd=tmp_path, session_id="session-2", seconds="20")
     assert result.returncode == WAKE
     assert [item["task_id"] for item in json.loads(result.stdout)["ready"]] == [second["task_id"]]
@@ -681,8 +681,7 @@ def test_hook_reconcile_excludes_ownerless_and_foreign_tasks(
         cwd=tmp_path,
     )
     assert result.returncode == 0
-    assert json.loads(result.stdout)["tasks"] == []
-    assert json.loads(result.stdout)["ready"] == []
+    assert result.stdout == ""
     assert {item["task_id"] for item in workspace.run("reconcile")["tasks"]} == {
         owned["task_id"],
         ownerless["task_id"],

@@ -177,8 +177,7 @@ def test_bridge_tasks_are_never_announced_to_a_session(
         cwd=tmp_path,
     )
     assert reconciled.returncode == 0
-    assert json.loads(reconciled.stdout)["tasks"] == []
-    assert json.loads(reconciled.stdout)["ready"] == []
+    assert reconciled.stdout == ""
 
 
 def test_manual_reconcile_offers_a_session_only_session_tasks(workspace: Workspace) -> None:

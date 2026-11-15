@@ -27,8 +27,10 @@ Mark those `"host_only": true`. They are refused rather than sent.
 
 ## When results come back
 
-At session start, collect each terminal task named as uncollected in the hook
-context before starting new delegated work. The status comes before the result.
+Collect each finished task the hook announces before starting new delegated work.
+`delegate reconcile` lists any finished task not yet collected (add `--task-root <dir>`
+for a task kept outside the default task root). The status comes
+before the result.
 
 Read the status before the content. A task that failed, timed out, or lost its worker did not produce a finding, and a partial message from such a task is not a finding either. Say plainly what did not happen.
 

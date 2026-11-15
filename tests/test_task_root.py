@@ -186,7 +186,7 @@ def test_a_session_task_under_another_task_root_is_followed_by_both_hooks(
         (handle["task_id"], handle["task_dir"])
     ]
 
-    # A later session start finds the same task, though it is not in the default ledger.
+    # A later session start is quiet; it does not list the task again.
     started = run_hook(
         workspace,
         "_hook-reconcile",
@@ -196,25 +196,14 @@ def test_a_session_task_under_another_task_root_is_followed_by_both_hooks(
         cwd=tmp_path,
     )
     assert started.returncode == 0
-    listing = json.loads(started.stdout)
-    assert [line["task_id"] for line in listing["tasks"]] == [handle["task_id"]]
+    assert started.stdout == ""
 
-    # And the printed values are enough to collect it.
-    line = listing["ready"][0]
+    # And the notified values are enough to collect it.
+    line = notice["ready"][0]
     delivery = workspace.run(
         "collect", line["task_id"], "--task-root", str(Path(line["task_dir"]).parent)
     )
     assert delivery["status"] == "completed"
-
-    other = run_hook(
-        workspace,
-        "_hook-reconcile",
-        {"session_id": "session-2"},
-        "--project-root",
-        str(workspace.repo),
-        cwd=tmp_path,
-    )
-    assert json.loads(other.stdout)["tasks"] == []
 
 
 def test_relative_paths_resolve_against_the_current_directory_and_are_recorded_absolute(
@@ -292,4 +281,4 @@ def test_legacy_entries_resolve_to_the_default_root_and_missing_ones_are_skipped
         workspace, "_hook-reconcile", {"session_id": "session-1"}, cwd=workspace.repo
     )
     assert started.returncode == 0
-    assert [line["task_id"] for line in json.loads(started.stdout)["tasks"]] == [handle["task_id"]]
+    assert started.stdout == ""

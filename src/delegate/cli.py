@@ -191,7 +191,7 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 
 
 def _line(state: dict[str, Any]) -> dict[str, Any]:
-    """One task, short enough to read at a glance in a session start."""
+    """One task, short enough to read at a glance."""
     return {
         "task_id": state["task_id"],
         "project_root": state["project_root"],
@@ -264,10 +264,10 @@ def _is_ready(state: dict[str, Any]) -> bool:
     return state["status"] in events.TERMINAL_STATES and not state.get("delivered_at")
 
 
-def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> int:
+def _reconcile_tasks(args: argparse.Namespace, session_id: str | None) -> list[dict[str, Any]]:
     # A manual call is a session unless it names an owner, and is shown only what
     # it could collect: offering it another kind's task ends in owner_mismatch.
-    # A hook call is shown the tasks its session submitted, wherever they are kept.
+    # A hook call covers the tasks its session submitted, wherever they are kept.
     task_dirs = _ledger_dirs(_ledger(args, _root(args.project_root)))
     if session_id:
         task_dirs += [*tasks.pending_completion_watches(session_id), *_session_watches(session_id)]
@@ -278,9 +278,11 @@ def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> in
             return tasks.may_act(state, caller)
         return bool(session_id) and tasks.owner_of(state) == ("session", session_id)
 
-    reconciled = _reconciled(
-        state for state in _read_states(dict.fromkeys(task_dirs)) if wanted(state)
-    )
+    return _reconciled(state for state in _read_states(dict.fromkeys(task_dirs)) if wanted(state))
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    reconciled = _reconcile_tasks(args, None)
     ready = [_line(state) for state in reconciled if _is_ready(state)]
     _print(
         {
@@ -293,11 +295,18 @@ def cmd_reconcile(args: argparse.Namespace, session_id: str | None = None) -> in
 
 
 def cmd_hook_reconcile(args: argparse.Namespace) -> int:
+    """Settle the session's tasks whose worker is gone, and print nothing.
+
+    A listing here would repeat every task the session ever submitted at each
+    start and compaction; completion is announced by the watch hook instead, and
+    ``delegate reconcile`` prints the list on demand.
+    """
     try:
         session_id = json.load(sys.stdin).get("session_id")
     except (ValueError, AttributeError):
         session_id = None
-    return cmd_reconcile(args, session_id if isinstance(session_id, str) else "")
+    _reconcile_tasks(args, session_id if isinstance(session_id, str) else "")
+    return 0
 
 
 #: An ``asyncRewake`` hook wakes the session on exit code 2 and on no other code,

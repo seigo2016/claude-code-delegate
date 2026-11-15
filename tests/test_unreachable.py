@@ -103,11 +103,11 @@ def ready_ids(result: subprocess.CompletedProcess[str]) -> list[str]:
     return [item["task_id"] for item in json.loads(result.stdout)["ready"]]
 
 
-def test_session_start_reports_the_reachable_task_past_a_stale_entry(scene: Scene) -> None:
+def test_session_start_passes_a_stale_entry_quietly(scene: Scene) -> None:
     scene.pending(scene.stale)
     result = scene.run("_hook-reconcile", {"session_id": SESSION})
     assert result.returncode == 0, result.stderr
-    assert ready_ids(result) == ["good"]
+    assert result.stdout == ""
 
 
 def test_a_stale_pending_entry_does_not_stop_every_later_bash_call(scene: Scene) -> None:

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Make the session-start hook quiet: `_hook-reconcile` still marks the session's tasks whose worker is gone as `orphaned` or `degraded`, but it prints nothing. It used to print every task the session had ever submitted, again at each compaction, which in a long session ran to hundreds of thousands of characters. Completion is still announced by the watch hook, and `delegate reconcile` still prints the full list. A finished but uncollected task is no longer listed at session start; run `delegate reconcile` to see it (with `--task-root <dir>` for a task kept outside the default task root).
+
 ## 0.3.0
 
 - Keep one unreachable task from stopping the hooks: in `_hook-reconcile` and `_hook-watch`, a task or registry entry that raises `OSError` (a read-only or unreadable task root) is skipped and left out of what is written back, so the other tasks are still reported and the exit code (2 for a ready task) depends only on tasks the hook can reach.

@@ -299,6 +299,12 @@ show only the tasks the hook's session submitted, wherever they are kept. `colle
 and `cancel` act on one named task and refuse it (`owner_mismatch`) unless the
 caller may act on it.
 
+At session start, and again after each compaction, a hook marks the session's tasks
+whose worker is gone as `orphaned` (or `degraded`, if a result survived). It prints
+nothing: a finished task is announced by the watch hook when it finishes, and
+`delegate reconcile` lists the tasks in a task root when you ask (pass
+`--task-root <dir>` for a task kept outside the default one).
+
 `submit --owner <id>` makes a bridge-owned task instead:
 `owner_kind` is `bridge`, no session is recorded, and no hook announces it.
 Only `collect` and `cancel` called with the same `--owner` may act on it; anyone else gets `owner_mismatch` (exit 5). A session-owned task
