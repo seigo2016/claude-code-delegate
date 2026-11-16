@@ -114,8 +114,9 @@ def _emit_locked(
 
     ts = now_iso()
     record = {"ts": ts, "task_id": state["task_id"], "status": status, **fields}
+    # Only the task's own log: a log shared by every task copied each record,
+    # including the workspace-change lists, and grew without bound.
     store.append_jsonl(task_dir / "events.jsonl", record)
-    store.append_jsonl(task_dir.parent / "events.jsonl", record)
     updated = {**state, **fields, "status": status, "updated_at": ts}
     if status in TERMINAL_STATES and not updated.get("terminal_at"):
         updated["terminal_at"] = ts

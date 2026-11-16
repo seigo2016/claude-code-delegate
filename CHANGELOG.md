@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+
+- Stop writing the log shared by all tasks (`<task root>/events.jsonl`). Nothing read it, and each record repeated the task's workspace-change lists, so it grew without bound (about 400 MB in one long-running project). Each task's own `events.jsonl` is unchanged. An existing shared log is left in place and can be removed by hand.
+
 ## 0.3.1
 
 - Make the session-start hook quiet: `_hook-reconcile` still marks the session's tasks whose worker is gone as `orphaned` or `degraded`, but it prints nothing. It used to print every task the session had ever submitted, again at each compaction, which in a long session ran to hundreds of thousands of characters. Completion is still announced by the watch hook, and `delegate reconcile` still prints the full list. A finished but uncollected task is no longer listed at session start; run `delegate reconcile` to see it (with `--task-root <dir>` for a task kept outside the default task root).
