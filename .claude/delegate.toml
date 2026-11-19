@@ -45,10 +45,3 @@ level = "light"
 [roles.adversarial-critic]
 level = "standard"
 timeout = 3600
-[workers.agy]
-adapter = "agy"
-enabled = true
-light = { model = "gemini-3.8-flash", effort = "high" }
-standard = { model = "gemini-3.8-flash", effort = "high" }
-
-

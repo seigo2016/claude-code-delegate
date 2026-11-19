@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+- Remove the Antigravity (`agy`) worker adapter. It is not used, and Antigravity's FAQ states that wrapping `agy` inside third-party coding agents is not supported under consumer plans (see also Additional Terms §6).
+
 ## 0.3.2
 
 - Stop writing the log shared by all tasks (`<task root>/events.jsonl`). Nothing read it, and each record repeated the task's workspace-change lists, so it grew without bound (about 400 MB in one long-running project). Each task's own `events.jsonl` is unchanged. An existing shared log is left in place and can be removed by hand.
