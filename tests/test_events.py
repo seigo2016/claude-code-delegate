@@ -18,7 +18,10 @@ def test_emit_records_the_event_in_the_task_log_only(tmp_path: Path) -> None:
     events.emit(task_dir, "running", pid=4242)
 
     assert store.read_json(task_dir / "state.json")["pid"] == 4242
-    recorded = [json.loads(line) for line in (task_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    recorded = [
+        json.loads(line)
+        for line in (task_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
     assert [event["status"] for event in recorded] == ["running"]
     assert not (task_dir.parent / "events.jsonl").exists()
 
