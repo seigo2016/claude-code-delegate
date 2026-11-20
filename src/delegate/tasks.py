@@ -6,6 +6,7 @@ can get its handle and stop thinking about the task.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -165,6 +166,21 @@ def watch_registry_dir(session_id: str) -> Path:
 def _pending_path(session_id: str, task_dir: Path) -> Path:
     digest = hashlib.sha256(str(task_dir).encode()).hexdigest()
     return watch_registry_dir(session_id) / "pending" / f"{digest}.json"
+
+
+def mark_hook_seen(session_id: str) -> None:
+    """Record that this session's Delegate hooks ran.
+
+    A submit reads it to say whether a completion notice can be counted on.
+    """
+    with contextlib.suppress(OSError):
+        path = watch_registry_dir(session_id) / "hook-seen"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+
+def hook_seen(session_id: str) -> bool:
+    return (watch_registry_dir(session_id) / "hook-seen").exists()
 
 
 def register_completion_watch(task_dir: Path, session_id: str | None) -> None:
@@ -356,6 +372,34 @@ def handle_of(state: dict[str, Any], *, deduplicated: bool = False) -> dict[str,
         "deduplicated": deduplicated,
         "next_action": "end_turn",
         "completion_delivery": "async_rewake",
+        **_completion_hook(state),
+    }
+
+
+def _completion_hook(state: dict[str, Any]) -> dict[str, str]:
+    """Whether the submitting session's completion hook has run. The handle used to promise a
+    notice even in a session where the plugin's hooks were not loaded, and a finished task then
+    waited unseen until someone looked."""
+    if state.get("owner_kind", "session") != "session":
+        return {}
+    session_id = state.get("submitter_session_id")
+    if not session_id:
+        return {
+            "completion_hook": "no_session",
+            "completion_note": (
+                "No Claude Code session id; no notice will come. "
+                "Run `delegate reconcile` to find the finished task."
+            ),
+        }
+    if hook_seen(session_id):
+        return {"completion_hook": "seen"}
+    return {
+        "completion_hook": "not_seen",
+        "completion_note": (
+            "This session's Delegate hooks have not run yet, so the notice may not come. "
+            "If the plugin is not loaded, run /reload-plugins; until a notice arrives, "
+            "check with `delegate reconcile`."
+        ),
     }
 
 

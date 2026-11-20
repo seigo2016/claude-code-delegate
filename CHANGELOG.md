@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.4
+
+- Say in the submit handle whether the session's completion hook has run (`completion_hook`: `seen`, `not_seen`, or `no_session`, with a `completion_note` when no notice can be counted on). Both hooks record that they ran for the session. A session whose plugin hooks were not loaded used to get a handle promising a notice that never came. `completion_delivery` is unchanged, so the hook still finds the handle.
+
 ## 0.3.3
 
 - Remove the Antigravity (`agy`) worker adapter. It is not used, and Antigravity's FAQ states that wrapping `agy` inside third-party coding agents is not supported under consumer plans (see also Additional Terms §6).

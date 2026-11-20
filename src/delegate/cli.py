@@ -305,6 +305,8 @@ def cmd_hook_reconcile(args: argparse.Namespace) -> int:
         session_id = json.load(sys.stdin).get("session_id")
     except (ValueError, AttributeError):
         session_id = None
+    if isinstance(session_id, str) and session_id:
+        tasks.mark_hook_seen(session_id)
     _reconcile_tasks(args, session_id if isinstance(session_id, str) else "")
     return 0
 
@@ -419,6 +421,7 @@ def cmd_hook_watch(args: argparse.Namespace) -> int:
         session_id = hook_input["session_id"]
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("missing session_id")
+        tasks.mark_hook_seen(session_id)
         output = (
             hook_input["tool_response"]["stdout"]
             if event_name == "PostToolUse"

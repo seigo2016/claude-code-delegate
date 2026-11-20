@@ -711,3 +711,24 @@ def test_hook_watch_without_session_id_is_quiet(
     assert json.loads(result.stdout)["ready"] == []
     owner = hook_watch(workspace, "hidden", cwd=tmp_path, session_id="session-1", seconds="0")
     assert owner.returncode == WAKE
+
+
+def test_a_handle_says_whether_this_sessions_completion_hook_has_run(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    # A session whose plugin hooks were not loaded once got a handle promising a notice that
+    # never came; the handle now says whether the hook has been seen in this session.
+    first = workspace.submit(title="before any hook")
+    assert first["completion_delivery"] == "async_rewake"
+    assert first["completion_hook"] == "not_seen"
+    assert "reconcile" in first["completion_note"]
+
+    hook_watch(workspace, "unrelated bash output", cwd=tmp_path)
+
+    second = workspace.submit(title="after the hook ran")
+    assert second["completion_hook"] == "seen"
+    assert "completion_note" not in second
+
+    workspace.env["CLAUDE_CODE_SESSION_ID"] = "session-2"
+    other = workspace.submit(title="another session")
+    assert other["completion_hook"] == "not_seen"

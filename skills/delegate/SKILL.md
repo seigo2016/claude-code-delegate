@@ -68,7 +68,7 @@ The scope is checked where a backend reports the changed path: a reported write 
 
 ## 3. Stop
 
-`submit` returns a handle immediately with `task_dir`, `next_action: end_turn`, and `completion_delivery: async_rewake`. Record the `task_id` and `task_dir`, dispatch anything else that is already ready, and end your turn.
+`submit` returns a handle immediately with `task_dir`, `next_action: end_turn`, and `completion_delivery: async_rewake`. Record the `task_id` and `task_dir`, dispatch anything else that is already ready, and end your turn. If the handle says `completion_hook: not_seen`, this session's Delegate hooks have not run yet and the notice may not come: tell the user, and check with `delegate reconcile` instead of waiting for it.
 
 Do not call `collect` in the same turn as `submit`, not even once. Do not call `status` to see how it is going. If another user turn arrives before the completion notification, continue only independent work and leave this task alone. Waiting costs the context you delegated to save.
 
