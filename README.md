@@ -156,6 +156,11 @@ For a role that enables either policy, add only the applicable optional fields:
 }
 ```
 
+A packet holds only the fields above (`objective`, `read`, `allowed_writes`,
+`required_evidence`, `host_only`, and the optional `read_optional`, `forbidden`,
+`escalation_reason`, `user_directed`). Any other field refuses the submit: the worker
+would never see it. Write instructions, constraints and deliverables in `objective`.
+
 `read` entries are checked at submit: a concrete path that does not exist (relative
 paths are taken from the project root) refuses the submit and lists the missing
 paths, and no task is created. Entries containing `*`, `?` or `[` and URLs are not

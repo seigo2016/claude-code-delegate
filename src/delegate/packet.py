@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 REQUIRED_FIELDS = ("objective", "read", "allowed_writes", "required_evidence", "host_only")
+OPTIONAL_FIELDS = ("read_optional", "forbidden", "escalation_reason", "user_directed")
 STRING_LISTS = ("read", "read_optional", "allowed_writes", "required_evidence", "forbidden")
 GLOB_CHARACTERS = frozenset("*?[")
 
@@ -22,6 +23,16 @@ def validate(value: Any) -> dict[str, Any]:
     missing = [field for field in REQUIRED_FIELDS if field not in value]
     if missing:
         raise ValueError(f"task packet missing fields: {', '.join(missing)}")
+    # A field the worker never sees is dropped silently otherwise: instructions written under a
+    # name of the caller's own choosing never reached the worker.
+    unknown = [field for field in value if field not in (*REQUIRED_FIELDS, *OPTIONAL_FIELDS)]
+    if unknown:
+        raise ValueError(
+            f"task packet has unknown fields: {', '.join(unknown)}. The worker sees only "
+            f"{', '.join((*REQUIRED_FIELDS, *OPTIONAL_FIELDS))}: put instructions, constraints "
+            "and deliverables in objective, files to read in read or read_optional, and "
+            "prohibitions in forbidden"
+        )
     if not isinstance(value["objective"], str) or not value["objective"].strip():
         raise ValueError("objective must be a non-empty string")
     for field in STRING_LISTS:

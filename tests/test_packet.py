@@ -26,6 +26,24 @@ def test_every_required_field_must_be_present() -> None:
         packet.validate(incomplete)
 
 
+def test_an_unknown_field_is_refused_with_where_its_content_belongs() -> None:
+    with pytest.raises(ValueError, match="unknown fields: requirements, context") as refused:
+        packet.validate({**valid(), "requirements": ["replace line 3"], "context": "x"})
+    assert "put instructions, constraints and deliverables in objective" in str(refused.value)
+
+
+def test_every_known_optional_field_is_accepted() -> None:
+    assert packet.validate(
+        {
+            **valid(),
+            "read_optional": ["out.md"],
+            "forbidden": ["push"],
+            "escalation_reason": "x",
+            "user_directed": True,
+        }
+    )
+
+
 def test_an_empty_objective_is_rejected() -> None:
     with pytest.raises(ValueError, match="objective"):
         packet.validate({**valid(), "objective": "   "})

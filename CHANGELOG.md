@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5
+
+- Refuse a submit whose packet has a field the worker never sees, naming the field and where its content belongs. Such a field used to be dropped silently, so instructions written under a name of the caller's choosing never reached the worker.
+
 ## 0.3.4
 
 - Say in the submit handle whether the session's completion hook has run (`completion_hook`: `seen`, `not_seen`, or `no_session`, with a `completion_note` when no notice can be counted on). Both hooks record that they ran for the session. A session whose plugin hooks were not loaded used to get a handle promising a notice that never came. `completion_delivery` is unchanged, so the hook still finds the handle.

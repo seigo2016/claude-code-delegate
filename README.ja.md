@@ -99,6 +99,8 @@ task は Claude が組み立てます。何をするか、何を読んでよい�
 }
 ```
 
+packet に書ける欄は上のもの(`objective`、`read`、`allowed_writes`、`required_evidence`、`host_only` と、任意の `read_optional`、`forbidden`、`escalation_reason`、`user_directed`)だけです。それ以外の欄があると submit は拒否されます。worker には渡らないためです。指示、制約、成果物は `objective` に書きます。
+
 `read` は submit 時に検査されます。実在しない具体的な path(相対 path は project root から解決)があると submit は拒否され、足りない path が列挙され、task は作られません。`*`、`?`、`[` を含む entry と URL は検査しません。あれば読む、または worker 自身が作る path は任意の `read_optional` に書きます。検査されず、prompt には存在しないかもしれないものとして示されます。
 
 ## 返ってくる結果
